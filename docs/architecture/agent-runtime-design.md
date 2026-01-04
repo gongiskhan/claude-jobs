@@ -881,3 +881,65 @@ pub async fn terminate_agent(
 3. **Cost tracking**: Should we track API costs per session/task?
 4. **Multi-tenancy**: Do we need per-user agent isolation?
 5. **Caching**: Should we cache agent responses for similar queries?
+
+---
+
+## Migration Guide
+
+### Current Status (Implemented)
+
+The following components have been implemented:
+
+- **Database schema**: `agent_sessions`, `agent_messages`, `agent_pending_inputs` tables
+- **Python sidecar**: `agent-sidecar/` with session management and JSON-RPC server
+- **Rust agent-runtime crate**: `crates/agent-runtime/` with bridge and sidecar manager
+- **API routes**: `/api/agents/` endpoints for session management
+- **Frontend components**: `AgentSessionPanel`, `AgentMessageList`, etc.
+- **AgentService**: Service layer integration in `crates/services/src/services/agent.rs`
+
+### Migration Steps for Existing Code
+
+1. **For new Claude agent features**: Use the new `/api/agents/` endpoints and `AgentSessionProvider` context
+2. **For existing ContainerService usage**: Gradually migrate to `AgentService` for Claude execution
+3. **For direct executor usage**: Replace `ClaudeExecutor` with `SidecarManager.create_session()`
+
+### Deprecated Components
+
+The following components are deprecated and should not be used for new development:
+
+- `crates/executors/src/executors/claude.rs` - Marked `#[deprecated]`
+- `crates/executors/src/executors/claude/client.rs` - Will be removed
+- `crates/executors/src/executors/claude/protocol.rs` - Will be removed
+
+### API Comparison
+
+**Old (CLI spawning):**
+```rust
+// Spawns Claude CLI as subprocess
+let executor = ClaudeExecutor::new(config);
+executor.spawn_and_stream(workspace, prompt).await?;
+```
+
+**New (SDK sidecar):**
+```rust
+// Uses Agent SDK via sidecar
+let sidecar = sidecar_manager.start_sidecar(workspace_id).await?;
+sidecar_manager.create_session(workspace_id, session_id, agent_type, config).await?;
+sidecar_manager.query(workspace_id, session_id, prompt, None).await?;
+```
+
+### Frontend Migration
+
+**Old pattern:**
+```tsx
+// Streaming logs from ExecutionProcess
+const { logs } = useLogStream(executionProcessId);
+```
+
+**New pattern:**
+```tsx
+// Using AgentSessionProvider
+<AgentSessionProvider initialSessionId={sessionId}>
+  <AgentSessionPanel />
+</AgentSessionProvider>
+```

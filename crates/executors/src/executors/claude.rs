@@ -1,3 +1,22 @@
+//! Claude CLI Executor
+//!
+//! # Deprecation Notice
+//!
+//! This executor spawns Claude via the CLI (`npx @anthropic-ai/claude-code`).
+//! It is being replaced by the agent-runtime crate which uses the Claude Agent SDK
+//! directly via a Python sidecar process.
+//!
+//! For new agent sessions, use the `/api/agents` endpoints and the `AgentService`
+//! instead of this executor.
+//!
+//! See `crates/agent-runtime/` and `docs/architecture/agent-runtime-design.md`
+//! for the new architecture.
+
+#![deprecated(
+    since = "0.1.0",
+    note = "Use agent-runtime crate instead. This executor spawns CLI processes which will be phased out."
+)]
+
 // SDK submodules
 pub mod client;
 pub mod protocol;
