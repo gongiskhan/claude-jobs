@@ -1,0 +1,20 @@
+[package]
+name = "agent-runtime"
+version = "0.1.0"
+edition = "2021"
+description = "Agent runtime bridge for Claude Agent SDK integration"
+
+[dependencies]
+tokio = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+async-trait = { workspace = true }
+ts-rs = { workspace = true }
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+futures = "0.3"
+
+[dev-dependencies]
+tokio-test = "0.4"

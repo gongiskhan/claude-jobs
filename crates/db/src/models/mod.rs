@@ -1,3 +1,6 @@
+pub mod agent_message;
+pub mod agent_pending_input;
+pub mod agent_session;
 pub mod coding_agent_turn;
 pub mod execution_process;
 pub mod execution_process_logs;

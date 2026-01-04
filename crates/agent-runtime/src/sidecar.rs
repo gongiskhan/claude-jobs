@@ -1,0 +1,229 @@
+//! Sidecar process manager.
+
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::process::Stdio;
+use std::sync::Arc;
+
+use thiserror::Error;
+use tokio::process::{Child, Command};
+use tokio::sync::RwLock;
+use uuid::Uuid;
+
+use crate::bridge::AgentRuntimeBridge;
+use crate::events::AgentEventHandler;
+
+#[derive(Debug, Error)]
+pub enum SidecarError {
+    #[error("Failed to spawn sidecar: {0}")]
+    SpawnFailed(#[from] std::io::Error),
+    #[error("Sidecar not found for workspace: {0}")]
+    NotFound(Uuid),
+    #[error("Bridge error: {0}")]
+    Bridge(#[from] crate::bridge::BridgeError),
+    #[error("Python not found")]
+    PythonNotFound,
+}
+
+/// Information about a running sidecar.
+struct SidecarInfo {
+    workspace_id: Uuid,
+    process: Child,
+    socket_path: PathBuf,
+    bridge: AgentRuntimeBridge,
+}
+
+/// Manages sidecar processes (one per workspace).
+pub struct SidecarManager {
+    /// Base directory for socket files.
+    socket_dir: PathBuf,
+    /// Path to the agent-sidecar Python package.
+    sidecar_path: PathBuf,
+    /// Running sidecars by workspace ID.
+    sidecars: RwLock<HashMap<Uuid, SidecarInfo>>,
+    /// Event handler for all sidecars.
+    event_handler: Arc<dyn AgentEventHandler>,
+}
+
+impl SidecarManager {
+    /// Create a new sidecar manager.
+    pub fn new(
+        socket_dir: PathBuf,
+        sidecar_path: PathBuf,
+        event_handler: Arc<dyn AgentEventHandler>,
+    ) -> Self {
+        Self {
+            socket_dir,
+            sidecar_path,
+            sidecars: RwLock::new(HashMap::new()),
+            event_handler,
+        }
+    }
+
+    /// Get the socket path for a workspace.
+    fn socket_path(&self, workspace_id: Uuid) -> PathBuf {
+        self.socket_dir.join(format!("agent-sidecar-{}.sock", workspace_id))
+    }
+
+    /// Start a sidecar for a workspace.
+    pub async fn start_sidecar(&self, workspace_id: Uuid) -> Result<(), SidecarError> {
+        // Check if already running
+        {
+            let sidecars = self.sidecars.read().await;
+            if sidecars.contains_key(&workspace_id) {
+                tracing::debug!("Sidecar already running for workspace {}", workspace_id);
+                return Ok(());
+            }
+        }
+
+        let socket_path = self.socket_path(workspace_id);
+
+        // Find Python executable
+        let python = self.find_python().await?;
+
+        // Build command
+        let mut cmd = Command::new(&python);
+        cmd.arg("-m")
+            .arg("agent_sidecar")
+            .arg("--socket")
+            .arg(&socket_path)
+            .arg("--workspace-id")
+            .arg(workspace_id.to_string())
+            .current_dir(&self.sidecar_path)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true);
+
+        // Add PYTHONPATH if needed
+        if let Some(parent) = self.sidecar_path.parent() {
+            cmd.env("PYTHONPATH", parent.join("src"));
+        }
+
+        tracing::info!("Starting sidecar for workspace {} at {:?}", workspace_id, socket_path);
+
+        let process = cmd.spawn()?;
+
+        // Wait for socket to be available
+        let socket_ready = self.wait_for_socket(&socket_path).await;
+        if !socket_ready {
+            tracing::error!("Sidecar socket not ready for workspace {}", workspace_id);
+            return Err(SidecarError::SpawnFailed(std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "Socket not ready",
+            )));
+        }
+
+        // Create and connect bridge
+        let mut bridge = AgentRuntimeBridge::new(
+            socket_path.to_string_lossy().as_ref(),
+            self.event_handler.clone(),
+        );
+        bridge.connect().await?;
+
+        // Store sidecar info
+        let info = SidecarInfo {
+            workspace_id,
+            process,
+            socket_path: socket_path.clone(),
+            bridge,
+        };
+
+        let mut sidecars = self.sidecars.write().await;
+        sidecars.insert(workspace_id, info);
+
+        tracing::info!("Sidecar started for workspace {}", workspace_id);
+        Ok(())
+    }
+
+    async fn find_python(&self) -> Result<PathBuf, SidecarError> {
+        // Try python3 first, then python
+        for name in &["python3", "python"] {
+            if let Ok(output) = tokio::process::Command::new("which")
+                .arg(name)
+                .output()
+                .await
+            {
+                if output.status.success() {
+                    let path = String::from_utf8_lossy(&output.stdout)
+                        .trim()
+                        .to_string();
+                    return Ok(PathBuf::from(path));
+                }
+            }
+        }
+        Err(SidecarError::PythonNotFound)
+    }
+
+    async fn wait_for_socket(&self, socket_path: &PathBuf) -> bool {
+        for _ in 0..50 {
+            // 5 seconds max
+            if socket_path.exists() {
+                return true;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        }
+        false
+    }
+
+    /// Stop a sidecar for a workspace.
+    pub async fn stop_sidecar(&self, workspace_id: Uuid) -> Result<(), SidecarError> {
+        let mut sidecars = self.sidecars.write().await;
+        if let Some(mut info) = sidecars.remove(&workspace_id) {
+            tracing::info!("Stopping sidecar for workspace {}", workspace_id);
+
+            // Try graceful termination first
+            let _ = info.bridge.terminate(workspace_id).await;
+
+            // Kill process if still running
+            let _ = info.process.kill().await;
+
+            // Remove socket file
+            let _ = tokio::fs::remove_file(&info.socket_path).await;
+        }
+        Ok(())
+    }
+
+    /// Stop all sidecars.
+    pub async fn stop_all(&self) {
+        let workspace_ids: Vec<Uuid> = {
+            let sidecars = self.sidecars.read().await;
+            sidecars.keys().cloned().collect()
+        };
+
+        for workspace_id in workspace_ids {
+            if let Err(e) = self.stop_sidecar(workspace_id).await {
+                tracing::error!("Failed to stop sidecar for workspace {}: {}", workspace_id, e);
+            }
+        }
+    }
+
+    /// Get the bridge for a workspace (starts sidecar if needed).
+    pub async fn get_bridge(&self, workspace_id: Uuid) -> Result<&AgentRuntimeBridge, SidecarError> {
+        // Ensure sidecar is running
+        self.start_sidecar(workspace_id).await?;
+
+        let sidecars = self.sidecars.read().await;
+        sidecars
+            .get(&workspace_id)
+            .map(|info| &info.bridge)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))
+    }
+
+    /// Execute a function with the bridge for a workspace.
+    pub async fn with_bridge<F, Fut, T>(&self, workspace_id: Uuid, f: F) -> Result<T, SidecarError>
+    where
+        F: FnOnce(&AgentRuntimeBridge) -> Fut,
+        Fut: std::future::Future<Output = Result<T, crate::bridge::BridgeError>>,
+    {
+        // Ensure sidecar is running
+        self.start_sidecar(workspace_id).await?;
+
+        let sidecars = self.sidecars.read().await;
+        let info = sidecars
+            .get(&workspace_id)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+
+        f(&info.bridge).await.map_err(SidecarError::Bridge)
+    }
+}

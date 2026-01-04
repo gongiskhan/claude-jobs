@@ -1,0 +1,47 @@
+[project]
+name = "agent-sidecar"
+version = "0.1.0"
+description = "Claude Agent SDK sidecar for claude-jobs"
+readme = "README.md"
+requires-python = ">=3.10"
+license = {text = "MIT"}
+authors = [
+    {name = "claude-jobs", email = "dev@claude-jobs.local"}
+]
+dependencies = [
+    "claude-agent-sdk>=0.1.0",
+    "grpcio>=1.60.0",
+    "grpcio-tools>=1.60.0",
+    "protobuf>=4.25.0",
+    "pydantic>=2.0.0",
+    "uvloop>=0.19.0; sys_platform != 'win32'",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=7.0.0",
+    "pytest-asyncio>=0.23.0",
+    "ruff>=0.1.0",
+    "mypy>=1.0.0",
+]
+
+[project.scripts]
+agent-sidecar = "agent_sidecar.main:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agent_sidecar"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "N", "W", "UP"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true

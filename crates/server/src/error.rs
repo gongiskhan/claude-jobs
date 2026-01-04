@@ -5,6 +5,7 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use db::models::{
+    agent_session::AgentSessionError,
     execution_process::ExecutionProcessError, project::ProjectError,
     project_repo::ProjectRepoError, repo::RepoError, scratch::ScratchError, session::SessionError,
     workspace::WorkspaceError,
@@ -76,6 +77,10 @@ pub enum ApiError {
     Conflict(String),
     #[error("Forbidden: {0}")]
     Forbidden(String),
+    #[error("Not found: {0}")]
+    NotFound(String),
+    #[error(transparent)]
+    AgentSession(#[from] AgentSessionError),
 }
 
 impl From<&'static str> for ApiError {
@@ -177,6 +182,17 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(_) => (StatusCode::BAD_REQUEST, "BadRequest"),
             ApiError::Conflict(_) => (StatusCode::CONFLICT, "ConflictError"),
             ApiError::Forbidden(_) => (StatusCode::FORBIDDEN, "ForbiddenError"),
+            ApiError::NotFound(_) => (StatusCode::NOT_FOUND, "NotFound"),
+            ApiError::AgentSession(err) => match err {
+                AgentSessionError::NotFound => (StatusCode::NOT_FOUND, "AgentSessionError"),
+                AgentSessionError::InvalidStateTransition { .. } => {
+                    (StatusCode::BAD_REQUEST, "AgentSessionError")
+                }
+                AgentSessionError::NotAwaitingInput => {
+                    (StatusCode::BAD_REQUEST, "AgentSessionError")
+                }
+                _ => (StatusCode::INTERNAL_SERVER_ERROR, "AgentSessionError"),
+            },
         };
 
         let error_message = match &self {
@@ -253,6 +269,17 @@ impl IntoResponse for ApiError {
             ApiError::BadRequest(msg) => msg.clone(),
             ApiError::Conflict(msg) => msg.clone(),
             ApiError::Forbidden(msg) => msg.clone(),
+            ApiError::NotFound(msg) => msg.clone(),
+            ApiError::AgentSession(err) => match err {
+                AgentSessionError::NotFound => "Agent session not found.".to_string(),
+                AgentSessionError::InvalidStateTransition { from, to } => {
+                    format!("Invalid state transition from {} to {}", from, to)
+                }
+                AgentSessionError::NotAwaitingInput => {
+                    "Agent is not awaiting input.".to_string()
+                }
+                _ => format!("{}: {}", error_type, self),
+            },
             _ => format!("{}: {}", error_type, self),
         };
         let response = ApiResponse::<()>::error(&error_message);
