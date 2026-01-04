@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, Row, SqlitePool};
 use thiserror::Error;
 use ts_rs::TS;
 use uuid::Uuid;
@@ -156,6 +156,24 @@ impl AgentSession {
     pub fn state_enum(&self) -> Option<AgentState> {
         AgentState::from_str(&self.state)
     }
+
+    fn from_row(row: sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get::<String, _>("id")?.parse().map_err(|_| sqlx::Error::Decode("invalid uuid".into()))?,
+            session_id: row.try_get::<String, _>("session_id")?.parse().map_err(|_| sqlx::Error::Decode("invalid uuid".into()))?,
+            agent_type: row.try_get("agent_type")?,
+            state: row.try_get("state")?,
+            sdk_session_id: row.try_get("sdk_session_id")?,
+            context: row.try_get("context")?,
+            current_tool_call_id: row.try_get("current_tool_call_id")?,
+            pending_question: row.try_get("pending_question")?,
+            error_message: row.try_get("error_message")?,
+            working_dir: row.try_get("working_dir")?,
+            created_at: row.try_get("created_at")?,
+            updated_at: row.try_get("updated_at")?,
+            completed_at: row.try_get("completed_at")?,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -174,139 +192,75 @@ pub struct UpdateAgentSession {
     pub error_message: Option<String>,
 }
 
+const SELECT_FIELDS: &str = r#"
+    id, session_id, agent_type, state, sdk_session_id, context,
+    current_tool_call_id, pending_question, error_message, working_dir,
+    created_at, updated_at, completed_at
+"#;
+
 impl AgentSession {
     pub async fn find_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentSession,
-            r#"SELECT
-                id AS "id!: Uuid",
-                session_id AS "session_id!: Uuid",
-                agent_type,
-                state,
-                sdk_session_id,
-                context,
-                current_tool_call_id,
-                pending_question,
-                error_message,
-                working_dir,
-                created_at AS "created_at!: DateTime<Utc>",
-                updated_at AS "updated_at!: DateTime<Utc>",
-                completed_at AS "completed_at: DateTime<Utc>"
-            FROM agent_sessions
-            WHERE id = $1"#,
-            id
-        )
-        .fetch_optional(pool)
-        .await
+        let id_str = id.to_string();
+        let sql = format!("SELECT {} FROM agent_sessions WHERE id = $1", SELECT_FIELDS);
+        let row = sqlx::query(&sql)
+            .bind(&id_str)
+            .fetch_optional(pool)
+            .await?;
+        row.map(Self::from_row).transpose()
     }
 
     pub async fn find_by_session_id(
         pool: &SqlitePool,
         session_id: Uuid,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentSession,
-            r#"SELECT
-                id AS "id!: Uuid",
-                session_id AS "session_id!: Uuid",
-                agent_type,
-                state,
-                sdk_session_id,
-                context,
-                current_tool_call_id,
-                pending_question,
-                error_message,
-                working_dir,
-                created_at AS "created_at!: DateTime<Utc>",
-                updated_at AS "updated_at!: DateTime<Utc>",
-                completed_at AS "completed_at: DateTime<Utc>"
-            FROM agent_sessions
-            WHERE session_id = $1
-            ORDER BY created_at DESC"#,
-            session_id
-        )
-        .fetch_all(pool)
-        .await
+        let id_str = session_id.to_string();
+        let sql = format!(
+            "SELECT {} FROM agent_sessions WHERE session_id = $1 ORDER BY created_at DESC",
+            SELECT_FIELDS
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&id_str)
+            .fetch_all(pool)
+            .await?;
+        rows.into_iter().map(Self::from_row).collect()
     }
 
     pub async fn find_latest_by_session_id(
         pool: &SqlitePool,
         session_id: Uuid,
     ) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentSession,
-            r#"SELECT
-                id AS "id!: Uuid",
-                session_id AS "session_id!: Uuid",
-                agent_type,
-                state,
-                sdk_session_id,
-                context,
-                current_tool_call_id,
-                pending_question,
-                error_message,
-                working_dir,
-                created_at AS "created_at!: DateTime<Utc>",
-                updated_at AS "updated_at!: DateTime<Utc>",
-                completed_at AS "completed_at: DateTime<Utc>"
-            FROM agent_sessions
-            WHERE session_id = $1
-            ORDER BY created_at DESC
-            LIMIT 1"#,
-            session_id
-        )
-        .fetch_optional(pool)
-        .await
+        let id_str = session_id.to_string();
+        let sql = format!(
+            "SELECT {} FROM agent_sessions WHERE session_id = $1 ORDER BY created_at DESC LIMIT 1",
+            SELECT_FIELDS
+        );
+        let row = sqlx::query(&sql)
+            .bind(&id_str)
+            .fetch_optional(pool)
+            .await?;
+        row.map(Self::from_row).transpose()
     }
 
     pub async fn find_active(pool: &SqlitePool) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentSession,
-            r#"SELECT
-                id AS "id!: Uuid",
-                session_id AS "session_id!: Uuid",
-                agent_type,
-                state,
-                sdk_session_id,
-                context,
-                current_tool_call_id,
-                pending_question,
-                error_message,
-                working_dir,
-                created_at AS "created_at!: DateTime<Utc>",
-                updated_at AS "updated_at!: DateTime<Utc>",
-                completed_at AS "completed_at: DateTime<Utc>"
-            FROM agent_sessions
-            WHERE state NOT IN ('completed', 'terminated')
-            ORDER BY updated_at DESC"#
-        )
-        .fetch_all(pool)
-        .await
+        let sql = format!(
+            "SELECT {} FROM agent_sessions WHERE state NOT IN ('completed', 'terminated') ORDER BY updated_at DESC",
+            SELECT_FIELDS
+        );
+        let rows = sqlx::query(&sql)
+            .fetch_all(pool)
+            .await?;
+        rows.into_iter().map(Self::from_row).collect()
     }
 
     pub async fn find_awaiting_input(pool: &SqlitePool) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentSession,
-            r#"SELECT
-                id AS "id!: Uuid",
-                session_id AS "session_id!: Uuid",
-                agent_type,
-                state,
-                sdk_session_id,
-                context,
-                current_tool_call_id,
-                pending_question,
-                error_message,
-                working_dir,
-                created_at AS "created_at!: DateTime<Utc>",
-                updated_at AS "updated_at!: DateTime<Utc>",
-                completed_at AS "completed_at: DateTime<Utc>"
-            FROM agent_sessions
-            WHERE state = 'awaiting_input'
-            ORDER BY updated_at DESC"#
-        )
-        .fetch_all(pool)
-        .await
+        let sql = format!(
+            "SELECT {} FROM agent_sessions WHERE state = 'awaiting_input' ORDER BY updated_at DESC",
+            SELECT_FIELDS
+        );
+        let rows = sqlx::query(&sql)
+            .fetch_all(pool)
+            .await?;
+        rows.into_iter().map(Self::from_row).collect()
     }
 
     pub async fn create(
@@ -315,35 +269,26 @@ impl AgentSession {
         session_id: Uuid,
         data: &CreateAgentSession,
     ) -> Result<Self, AgentSessionError> {
+        let id_str = id.to_string();
+        let session_id_str = session_id.to_string();
         let agent_type = data.agent_type.as_str();
         let state = AgentState::Created.as_str();
 
-        Ok(sqlx::query_as!(
-            AgentSession,
+        let sql = format!(
             r#"INSERT INTO agent_sessions (id, session_id, agent_type, state, working_dir)
                VALUES ($1, $2, $3, $4, $5)
-               RETURNING
-                   id AS "id!: Uuid",
-                   session_id AS "session_id!: Uuid",
-                   agent_type,
-                   state,
-                   sdk_session_id,
-                   context,
-                   current_tool_call_id,
-                   pending_question,
-                   error_message,
-                   working_dir,
-                   created_at AS "created_at!: DateTime<Utc>",
-                   updated_at AS "updated_at!: DateTime<Utc>",
-                   completed_at AS "completed_at: DateTime<Utc>""#,
-            id,
-            session_id,
-            agent_type,
-            state,
-            data.working_dir
-        )
-        .fetch_one(pool)
-        .await?)
+               RETURNING {}"#,
+            SELECT_FIELDS
+        );
+        let row = sqlx::query(&sql)
+            .bind(&id_str)
+            .bind(&session_id_str)
+            .bind(agent_type)
+            .bind(state)
+            .bind(&data.working_dir)
+            .fetch_one(pool)
+            .await?;
+        Ok(Self::from_row(row)?)
     }
 
     pub async fn update_state(
@@ -367,6 +312,7 @@ impl AgentSession {
             });
         }
 
+        let id_str = id.to_string();
         let state_str = new_state.as_str();
         let completed_at = if new_state.is_terminal() {
             Some(Utc::now())
@@ -374,31 +320,20 @@ impl AgentSession {
             None
         };
 
-        Ok(sqlx::query_as!(
-            AgentSession,
+        let sql = format!(
             r#"UPDATE agent_sessions
                SET state = $2, completed_at = $3, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                WHERE id = $1
-               RETURNING
-                   id AS "id!: Uuid",
-                   session_id AS "session_id!: Uuid",
-                   agent_type,
-                   state,
-                   sdk_session_id,
-                   context,
-                   current_tool_call_id,
-                   pending_question,
-                   error_message,
-                   working_dir,
-                   created_at AS "created_at!: DateTime<Utc>",
-                   updated_at AS "updated_at!: DateTime<Utc>",
-                   completed_at AS "completed_at: DateTime<Utc>""#,
-            id,
-            state_str,
-            completed_at
-        )
-        .fetch_one(pool)
-        .await?)
+               RETURNING {}"#,
+            SELECT_FIELDS
+        );
+        let row = sqlx::query(&sql)
+            .bind(&id_str)
+            .bind(state_str)
+            .bind(completed_at)
+            .fetch_one(pool)
+            .await?;
+        Ok(Self::from_row(row)?)
     }
 
     pub async fn set_sdk_session_id(
@@ -406,13 +341,14 @@ impl AgentSession {
         id: Uuid,
         sdk_session_id: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let id_str = id.to_string();
+        sqlx::query(
             r#"UPDATE agent_sessions
                SET sdk_session_id = $2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                WHERE id = $1"#,
-            id,
-            sdk_session_id
         )
+        .bind(&id_str)
+        .bind(sdk_session_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -424,16 +360,17 @@ impl AgentSession {
         question: Option<&str>,
         tool_call_id: Option<&str>,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let id_str = id.to_string();
+        sqlx::query(
             r#"UPDATE agent_sessions
                SET pending_question = $2,
                    current_tool_call_id = $3,
                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                WHERE id = $1"#,
-            id,
-            question,
-            tool_call_id
         )
+        .bind(&id_str)
+        .bind(question)
+        .bind(tool_call_id)
         .execute(pool)
         .await?;
         Ok(())
@@ -444,13 +381,14 @@ impl AgentSession {
         id: Uuid,
         context: &str,
     ) -> Result<(), sqlx::Error> {
-        sqlx::query!(
+        let id_str = id.to_string();
+        sqlx::query(
             r#"UPDATE agent_sessions
                SET context = $2, updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                WHERE id = $1"#,
-            id,
-            context
         )
+        .bind(&id_str)
+        .bind(context)
         .execute(pool)
         .await?;
         Ok(())
@@ -461,25 +399,28 @@ impl AgentSession {
         id: Uuid,
         error_message: &str,
     ) -> Result<(), sqlx::Error> {
+        let id_str = id.to_string();
         let terminated = AgentState::Terminated.as_str();
         let now = Utc::now();
-        sqlx::query!(
+        sqlx::query(
             r#"UPDATE agent_sessions
                SET state = $2, error_message = $3, completed_at = $4,
                    updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
                WHERE id = $1"#,
-            id,
-            terminated,
-            error_message,
-            now
         )
+        .bind(&id_str)
+        .bind(terminated)
+        .bind(error_message)
+        .bind(now)
         .execute(pool)
         .await?;
         Ok(())
     }
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
-        sqlx::query!("DELETE FROM agent_sessions WHERE id = $1", id)
+        let id_str = id.to_string();
+        sqlx::query("DELETE FROM agent_sessions WHERE id = $1")
+            .bind(&id_str)
             .execute(pool)
             .await?;
         Ok(())

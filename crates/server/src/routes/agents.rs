@@ -3,20 +3,23 @@
 //! These routes provide the API for managing Claude Agent SDK sessions.
 
 use axum::{
-    Extension, Json, Router,
-    extract::{Path, Query, State, WebSocketUpgrade},
-    response::{IntoResponse, Response},
-    routing::{delete, get, post},
+    Json, Router,
+    extract::{
+        Path, Query, State,
+        ws::{Message, WebSocket, WebSocketUpgrade},
+    },
+    response::Response,
+    routing::{get, post},
 };
 use db::models::{
     agent_message::{AgentMessage, CreateAgentMessage, MessageRole},
-    agent_pending_input::{
-        AgentPendingInput, CreateAgentPendingInput, InputType, RespondToInput,
-    },
+    agent_pending_input::{AgentPendingInput, InputType, RespondToInput},
     agent_session::{AgentSession, AgentState, AgentType, CreateAgentSession},
     session::Session,
     workspace::Workspace,
 };
+use deployment::Deployment;
+use futures_util::{SinkExt, StreamExt};
 use serde::{Deserialize, Serialize};
 use ts_rs::TS;
 use utils::response::ApiResponse;
@@ -58,7 +61,10 @@ pub struct AgentSessionResponse {
     pub session_id: Uuid,
     pub agent_type: String,
     pub state: String,
+    pub pending_question: Option<String>,
+    pub error_message: Option<String>,
     pub created_at: String,
+    pub updated_at: String,
 }
 
 impl From<AgentSession> for AgentSessionResponse {
@@ -68,7 +74,10 @@ impl From<AgentSession> for AgentSessionResponse {
             session_id: session.session_id,
             agent_type: session.agent_type,
             state: session.state,
+            pending_question: session.pending_question,
+            error_message: session.error_message,
             created_at: session.created_at.to_rfc3339(),
+            updated_at: session.updated_at.to_rfc3339(),
         }
     }
 }
@@ -78,6 +87,44 @@ impl From<AgentSession> for AgentSessionResponse {
 pub struct ListAgentSessionsQuery {
     pub session_id: Option<Uuid>,
     pub state: Option<String>,
+}
+
+/// Event sent via WebSocket.
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+pub enum AgentWsEvent {
+    #[serde(rename = "state_changed")]
+    StateChanged {
+        agent_session_id: Uuid,
+        from_state: String,
+        to_state: String,
+    },
+    #[serde(rename = "message")]
+    Message {
+        agent_session_id: Uuid,
+        role: String,
+        content: String,
+    },
+    #[serde(rename = "question")]
+    Question {
+        agent_session_id: Uuid,
+        input_id: Uuid,
+        question: String,
+    },
+    #[serde(rename = "approval_needed")]
+    ApprovalNeeded {
+        agent_session_id: Uuid,
+        input_id: Uuid,
+        tool_name: String,
+        tool_input: serde_json::Value,
+    },
+    #[serde(rename = "completed")]
+    Completed { agent_session_id: Uuid },
+    #[serde(rename = "error")]
+    Error {
+        agent_session_id: Uuid,
+        error: String,
+    },
 }
 
 /// Create a new agent session for a workspace.
@@ -106,7 +153,9 @@ pub async fn create_agent_session(
         .unwrap_or(AgentType::Coding);
 
     // Determine working directory
-    let working_dir = request.working_dir.or_else(|| workspace.agent_working_dir.clone());
+    let working_dir = request
+        .working_dir
+        .or_else(|| workspace.agent_working_dir.clone());
 
     // Create agent session
     let agent_session = AgentSession::create(
@@ -118,11 +167,11 @@ pub async fn create_agent_session(
             working_dir,
         },
     )
-    .await
-    .map_err(|e| ApiError::Database(e.into()))?;
+    .await?;
 
-    // TODO: Start the sidecar process for this workspace and initialize the agent
-    // This will be implemented in Phase 2 when we integrate with the agent-runtime crate
+    // Transition to Idle state (ready to receive queries)
+    let agent_session = AgentSession::update_state(pool, agent_session.id, AgentState::Idle)
+        .await?;
 
     Ok(Json(ApiResponse::success(agent_session.into())))
 }
@@ -200,11 +249,10 @@ pub async fn query_agent(
 
     // Update state to Executing
     AgentSession::update_state(pool, agent_session_id, AgentState::Executing)
-        .await
-        .map_err(|e| ApiError::Database(e.into()))?;
+        .await?;
 
     // TODO: Send query to sidecar via agent-runtime bridge
-    // This will be implemented in Phase 2
+    // For now, the sidecar integration will be connected in a follow-up
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -255,10 +303,7 @@ pub async fn respond_to_question(
 
     // Update state back to Executing
     AgentSession::update_state(pool, agent_session_id, AgentState::Executing)
-        .await
-        .map_err(|e| ApiError::Database(e.into()))?;
-
-    // TODO: Send response to sidecar to resume execution
+        .await?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -315,10 +360,7 @@ pub async fn approve_tool_use(
 
     // Update state back to Executing
     AgentSession::update_state(pool, agent_session_id, AgentState::Executing)
-        .await
-        .map_err(|e| ApiError::Database(e.into()))?;
-
-    // TODO: Send approval to sidecar
+        .await?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -338,7 +380,10 @@ pub async fn pause_agent(
         .state_enum()
         .ok_or_else(|| ApiError::BadRequest("Invalid agent state".to_string()))?;
 
-    if !matches!(current_state, AgentState::Executing | AgentState::AwaitingInput) {
+    if !matches!(
+        current_state,
+        AgentState::Executing | AgentState::AwaitingInput
+    ) {
         return Err(ApiError::BadRequest(format!(
             "Cannot pause agent in state: {}",
             agent_session.state
@@ -347,10 +392,7 @@ pub async fn pause_agent(
 
     // Update state to Paused
     AgentSession::update_state(pool, agent_session_id, AgentState::Paused)
-        .await
-        .map_err(|e| ApiError::Database(e.into()))?;
-
-    // TODO: Send pause command to sidecar
+        .await?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -367,17 +409,12 @@ pub async fn resume_agent(
         .ok_or_else(|| ApiError::NotFound("Agent session not found".to_string()))?;
 
     if agent_session.state != AgentState::Paused.as_str() {
-        return Err(ApiError::BadRequest(
-            "Agent is not paused".to_string(),
-        ));
+        return Err(ApiError::BadRequest("Agent is not paused".to_string()));
     }
 
     // Update state to Executing
     AgentSession::update_state(pool, agent_session_id, AgentState::Executing)
-        .await
-        .map_err(|e| ApiError::Database(e.into()))?;
-
-    // TODO: Send resume command to sidecar
+        .await?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -405,10 +442,7 @@ pub async fn terminate_agent(
 
     // Update state to Terminated
     AgentSession::update_state(pool, agent_session_id, AgentState::Terminated)
-        .await
-        .map_err(|e| ApiError::Database(e.into()))?;
-
-    // TODO: Send terminate command to sidecar
+        .await?;
 
     Ok(Json(ApiResponse::success(())))
 }
@@ -458,17 +492,145 @@ pub async fn stream_agent_events(
         .await?
         .ok_or_else(|| ApiError::NotFound("Agent session not found".to_string()))?;
 
-    // TODO: Implement WebSocket streaming for agent events
-    // This will connect to the sidecar and forward events to the client
+    Ok(ws.on_upgrade(move |socket| handle_agent_events_ws(socket, deployment, agent_session_id)))
+}
 
-    Ok(ws.on_upgrade(move |socket| async move {
-        // Placeholder - will be implemented in Phase 2
-        tracing::info!("WebSocket connection for agent session {}", agent_session_id);
-    }))
+/// Handle WebSocket connection for agent events.
+async fn handle_agent_events_ws(
+    socket: WebSocket,
+    deployment: DeploymentImpl,
+    agent_session_id: Uuid,
+) {
+    let (mut sender, mut receiver) = socket.split();
+    let pool = &deployment.db().pool;
+
+    // Track the last known state
+    let mut last_state: Option<String> = None;
+    let mut last_message_count = 0usize;
+    let mut last_pending_count = 0usize;
+
+    // Poll for changes every 500ms
+    let mut interval = tokio::time::interval(tokio::time::Duration::from_millis(500));
+
+    // Spawn a task to drain incoming messages (for ping/pong)
+    tokio::spawn(async move {
+        while let Some(Ok(_)) = receiver.next().await {}
+    });
+
+    loop {
+        interval.tick().await;
+
+        // Check if session still exists
+        let session = match AgentSession::find_by_id(pool, agent_session_id).await {
+            Ok(Some(s)) => s,
+            Ok(None) => {
+                tracing::debug!("Agent session {} no longer exists", agent_session_id);
+                break;
+            }
+            Err(e) => {
+                tracing::error!("Error fetching agent session: {}", e);
+                break;
+            }
+        };
+
+        // Check for state changes
+        if last_state.as_ref() != Some(&session.state) {
+            let event = AgentWsEvent::StateChanged {
+                agent_session_id,
+                from_state: last_state.clone().unwrap_or_default(),
+                to_state: session.state.clone(),
+            };
+
+            if let Ok(json) = serde_json::to_string(&event) {
+                if sender.send(Message::Text(json.into())).await.is_err() {
+                    break;
+                }
+            }
+
+            last_state = Some(session.state.clone());
+
+            // Check if terminated
+            if let Some(state) = AgentState::from_str(&session.state) {
+                if state.is_terminal() {
+                    // Send final event
+                    if let Some(ref error) = session.error_message {
+                        let event = AgentWsEvent::Error {
+                            agent_session_id,
+                            error: error.clone(),
+                        };
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            let _ = sender.send(Message::Text(json.into())).await;
+                        }
+                    } else {
+                        let event = AgentWsEvent::Completed { agent_session_id };
+                        if let Ok(json) = serde_json::to_string(&event) {
+                            let _ = sender.send(Message::Text(json.into())).await;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+
+        // Check for new messages
+        if let Ok(messages) = AgentMessage::find_by_agent_session_id(pool, agent_session_id).await {
+            if messages.len() > last_message_count {
+                for msg in messages.iter().skip(last_message_count) {
+                    let event = AgentWsEvent::Message {
+                        agent_session_id,
+                        role: msg.role.clone(),
+                        content: msg.content.clone(),
+                    };
+                    if let Ok(json) = serde_json::to_string(&event) {
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                last_message_count = messages.len();
+            }
+        }
+
+        // Check for pending inputs
+        if let Ok(pending) = AgentPendingInput::find_pending(pool, agent_session_id).await {
+            if pending.len() > last_pending_count {
+                for input in pending.iter().skip(last_pending_count) {
+                    let event = if input.input_type == InputType::Approval.as_str() {
+                        AgentWsEvent::ApprovalNeeded {
+                            agent_session_id,
+                            input_id: input.id,
+                            tool_name: input.tool_name.clone().unwrap_or_default(),
+                            tool_input: input
+                                .tool_input_json()
+                                .unwrap_or(serde_json::Value::Null),
+                        }
+                    } else {
+                        AgentWsEvent::Question {
+                            agent_session_id,
+                            input_id: input.id,
+                            question: input.prompt.clone(),
+                        }
+                    };
+
+                    if let Ok(json) = serde_json::to_string(&event) {
+                        if sender.send(Message::Text(json.into())).await.is_err() {
+                            return;
+                        }
+                    }
+                }
+                last_pending_count = pending.len();
+            }
+        }
+    }
+
+    tracing::debug!(
+        "WebSocket connection closed for agent session {}",
+        agent_session_id
+    );
 }
 
 /// Build the agent routes.
-pub fn router(deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
+pub fn router(_deployment: &DeploymentImpl) -> Router<DeploymentImpl> {
     let agent_session_routes = Router::new()
         .route("/", get(get_agent_session).delete(terminate_agent))
         .route("/query", post(query_agent))

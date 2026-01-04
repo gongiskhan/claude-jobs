@@ -1,6 +1,6 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use sqlx::{FromRow, SqlitePool};
+use sqlx::{FromRow, Row, SqlitePool};
 use ts_rs::TS;
 use uuid::Uuid;
 
@@ -64,6 +64,18 @@ impl AgentMessage {
             .as_ref()
             .and_then(|s| serde_json::from_str(s).ok())
     }
+
+    fn from_row(row: sqlx::sqlite::SqliteRow) -> Result<Self, sqlx::Error> {
+        Ok(Self {
+            id: row.try_get::<String, _>("id")?.parse().map_err(|_| sqlx::Error::Decode("invalid uuid".into()))?,
+            agent_session_id: row.try_get::<String, _>("agent_session_id")?.parse().map_err(|_| sqlx::Error::Decode("invalid uuid".into()))?,
+            role: row.try_get("role")?,
+            content: row.try_get("content")?,
+            metadata: row.try_get("metadata")?,
+            token_count: row.try_get("token_count")?,
+            created_at: row.try_get("created_at")?,
+        })
+    }
 }
 
 #[derive(Debug, Deserialize, TS)]
@@ -74,47 +86,33 @@ pub struct CreateAgentMessage {
     pub token_count: Option<i32>,
 }
 
+const SELECT_FIELDS: &str = "id, agent_session_id, role, content, metadata, token_count, created_at";
+
 impl AgentMessage {
     pub async fn find_by_id(pool: &SqlitePool, id: Uuid) -> Result<Option<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentMessage,
-            r#"SELECT
-                id AS "id!: Uuid",
-                agent_session_id AS "agent_session_id!: Uuid",
-                role,
-                content,
-                metadata,
-                token_count,
-                created_at AS "created_at!: DateTime<Utc>"
-            FROM agent_messages
-            WHERE id = $1"#,
-            id
-        )
-        .fetch_optional(pool)
-        .await
+        let id_str = id.to_string();
+        let sql = format!("SELECT {} FROM agent_messages WHERE id = $1", SELECT_FIELDS);
+        let row = sqlx::query(&sql)
+            .bind(&id_str)
+            .fetch_optional(pool)
+            .await?;
+        row.map(Self::from_row).transpose()
     }
 
     pub async fn find_by_agent_session_id(
         pool: &SqlitePool,
         agent_session_id: Uuid,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentMessage,
-            r#"SELECT
-                id AS "id!: Uuid",
-                agent_session_id AS "agent_session_id!: Uuid",
-                role,
-                content,
-                metadata,
-                token_count,
-                created_at AS "created_at!: DateTime<Utc>"
-            FROM agent_messages
-            WHERE agent_session_id = $1
-            ORDER BY created_at ASC"#,
-            agent_session_id
-        )
-        .fetch_all(pool)
-        .await
+        let id_str = agent_session_id.to_string();
+        let sql = format!(
+            "SELECT {} FROM agent_messages WHERE agent_session_id = $1 ORDER BY created_at ASC",
+            SELECT_FIELDS
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&id_str)
+            .fetch_all(pool)
+            .await?;
+        rows.into_iter().map(Self::from_row).collect()
     }
 
     /// Get messages with pagination for context management
@@ -123,29 +121,19 @@ impl AgentMessage {
         agent_session_id: Uuid,
         limit: i64,
     ) -> Result<Vec<Self>, sqlx::Error> {
-        sqlx::query_as!(
-            AgentMessage,
-            r#"SELECT
-                id AS "id!: Uuid",
-                agent_session_id AS "agent_session_id!: Uuid",
-                role,
-                content,
-                metadata,
-                token_count,
-                created_at AS "created_at!: DateTime<Utc>"
-            FROM agent_messages
-            WHERE agent_session_id = $1
-            ORDER BY created_at DESC
-            LIMIT $2"#,
-            agent_session_id,
-            limit
-        )
-        .fetch_all(pool)
-        .await
-        .map(|mut msgs| {
-            msgs.reverse(); // Return in chronological order
-            msgs
-        })
+        let id_str = agent_session_id.to_string();
+        let sql = format!(
+            "SELECT {} FROM agent_messages WHERE agent_session_id = $1 ORDER BY created_at DESC LIMIT $2",
+            SELECT_FIELDS
+        );
+        let rows = sqlx::query(&sql)
+            .bind(&id_str)
+            .bind(limit)
+            .fetch_all(pool)
+            .await?;
+        let mut messages: Vec<Self> = rows.into_iter().map(Self::from_row).collect::<Result<Vec<_>, _>>()?;
+        messages.reverse(); // Return in chronological order
+        Ok(messages)
     }
 
     /// Get total token count for a session
@@ -153,15 +141,14 @@ impl AgentMessage {
         pool: &SqlitePool,
         agent_session_id: Uuid,
     ) -> Result<i64, sqlx::Error> {
-        let result = sqlx::query_scalar!(
-            r#"SELECT COALESCE(SUM(token_count), 0) AS "total!: i64"
-            FROM agent_messages
-            WHERE agent_session_id = $1"#,
-            agent_session_id
+        let id_str = agent_session_id.to_string();
+        let row = sqlx::query(
+            "SELECT COALESCE(SUM(token_count), 0) as total FROM agent_messages WHERE agent_session_id = $1"
         )
+        .bind(&id_str)
         .fetch_one(pool)
         .await?;
-        Ok(result)
+        Ok(row.try_get::<i64, _>("total")?)
     }
 
     pub async fn create(
@@ -170,30 +157,27 @@ impl AgentMessage {
         agent_session_id: Uuid,
         data: &CreateAgentMessage,
     ) -> Result<Self, sqlx::Error> {
+        let id_str = id.to_string();
+        let agent_session_id_str = agent_session_id.to_string();
         let role = data.role.as_str();
         let metadata = data.metadata.as_ref().map(|v| v.to_string());
 
-        sqlx::query_as!(
-            AgentMessage,
+        let sql = format!(
             r#"INSERT INTO agent_messages (id, agent_session_id, role, content, metadata, token_count)
                VALUES ($1, $2, $3, $4, $5, $6)
-               RETURNING
-                   id AS "id!: Uuid",
-                   agent_session_id AS "agent_session_id!: Uuid",
-                   role,
-                   content,
-                   metadata,
-                   token_count,
-                   created_at AS "created_at!: DateTime<Utc>""#,
-            id,
-            agent_session_id,
-            role,
-            data.content,
-            metadata,
-            data.token_count
-        )
-        .fetch_one(pool)
-        .await
+               RETURNING {}"#,
+            SELECT_FIELDS
+        );
+        let row = sqlx::query(&sql)
+            .bind(&id_str)
+            .bind(&agent_session_id_str)
+            .bind(role)
+            .bind(&data.content)
+            .bind(&metadata)
+            .bind(data.token_count)
+            .fetch_one(pool)
+            .await?;
+        Self::from_row(row)
     }
 
     /// Bulk insert messages (for restoring context)
@@ -212,7 +196,9 @@ impl AgentMessage {
     }
 
     pub async fn delete(pool: &SqlitePool, id: Uuid) -> Result<(), sqlx::Error> {
-        sqlx::query!("DELETE FROM agent_messages WHERE id = $1", id)
+        let id_str = id.to_string();
+        sqlx::query("DELETE FROM agent_messages WHERE id = $1")
+            .bind(&id_str)
             .execute(pool)
             .await?;
         Ok(())
@@ -223,12 +209,11 @@ impl AgentMessage {
         pool: &SqlitePool,
         agent_session_id: Uuid,
     ) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query!(
-            "DELETE FROM agent_messages WHERE agent_session_id = $1",
-            agent_session_id
-        )
-        .execute(pool)
-        .await?;
+        let id_str = agent_session_id.to_string();
+        let result = sqlx::query("DELETE FROM agent_messages WHERE agent_session_id = $1")
+            .bind(&id_str)
+            .execute(pool)
+            .await?;
         Ok(result.rows_affected())
     }
 
@@ -238,7 +223,8 @@ impl AgentMessage {
         agent_session_id: Uuid,
         keep_count: i64,
     ) -> Result<u64, sqlx::Error> {
-        let result = sqlx::query!(
+        let id_str = agent_session_id.to_string();
+        let result = sqlx::query(
             r#"DELETE FROM agent_messages
                WHERE agent_session_id = $1
                AND id NOT IN (
@@ -247,9 +233,9 @@ impl AgentMessage {
                    ORDER BY created_at DESC
                    LIMIT $2
                )"#,
-            agent_session_id,
-            keep_count
         )
+        .bind(&id_str)
+        .bind(keep_count)
         .execute(pool)
         .await?;
         Ok(result.rows_affected())

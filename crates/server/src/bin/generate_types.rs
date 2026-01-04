@@ -201,6 +201,19 @@ fn generate_types_content() -> String {
         executors::logs::ToolStatus::decl(),
         executors::logs::utils::patch::PatchType::decl(),
         serde_json::Value::decl(),
+        // Agent runtime types
+        db::models::agent_session::AgentType::decl(),
+        db::models::agent_session::AgentState::decl(),
+        db::models::agent_session::AgentSession::decl(),
+        db::models::agent_session::CreateAgentSession::decl(),
+        db::models::agent_session::UpdateAgentSession::decl(),
+        db::models::agent_message::MessageRole::decl(),
+        db::models::agent_message::AgentMessage::decl(),
+        db::models::agent_message::CreateAgentMessage::decl(),
+        db::models::agent_pending_input::InputType::decl(),
+        db::models::agent_pending_input::AgentPendingInput::decl(),
+        db::models::agent_pending_input::CreateAgentPendingInput::decl(),
+        db::models::agent_pending_input::RespondToInput::decl(),
     ];
 
     let body = decls

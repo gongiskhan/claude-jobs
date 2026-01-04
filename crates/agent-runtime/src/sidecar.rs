@@ -26,6 +26,7 @@ pub enum SidecarError {
 }
 
 /// Information about a running sidecar.
+#[allow(dead_code)]
 struct SidecarInfo {
     workspace_id: Uuid,
     process: Child,
@@ -198,32 +199,129 @@ impl SidecarManager {
         }
     }
 
-    /// Get the bridge for a workspace (starts sidecar if needed).
-    pub async fn get_bridge(&self, workspace_id: Uuid) -> Result<&AgentRuntimeBridge, SidecarError> {
-        // Ensure sidecar is running
+    /// Create an agent session in the sidecar.
+    pub async fn create_session(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        agent_type: crate::types::AgentType,
+        config: crate::types::AgentConfig,
+    ) -> Result<(), SidecarError> {
         self.start_sidecar(workspace_id).await?;
-
-        let sidecars = self.sidecars.read().await;
-        sidecars
-            .get(&workspace_id)
-            .map(|info| &info.bridge)
-            .ok_or_else(|| SidecarError::NotFound(workspace_id))
-    }
-
-    /// Execute a function with the bridge for a workspace.
-    pub async fn with_bridge<F, Fut, T>(&self, workspace_id: Uuid, f: F) -> Result<T, SidecarError>
-    where
-        F: FnOnce(&AgentRuntimeBridge) -> Fut,
-        Fut: std::future::Future<Output = Result<T, crate::bridge::BridgeError>>,
-    {
-        // Ensure sidecar is running
-        self.start_sidecar(workspace_id).await?;
-
         let sidecars = self.sidecars.read().await;
         let info = sidecars
             .get(&workspace_id)
             .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+        info.bridge
+            .create_session(session_id, agent_type, config)
+            .await
+            .map(|_| ())
+            .map_err(SidecarError::Bridge)
+    }
 
-        f(&info.bridge).await.map_err(SidecarError::Bridge)
+    /// Send a query to an agent session.
+    pub async fn query(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        prompt: &str,
+        context: Option<crate::types::SessionContext>,
+    ) -> Result<(), SidecarError> {
+        self.start_sidecar(workspace_id).await?;
+        let sidecars = self.sidecars.read().await;
+        let info = sidecars
+            .get(&workspace_id)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+        info.bridge
+            .query(session_id, prompt, context)
+            .await
+            .map_err(SidecarError::Bridge)
+    }
+
+    /// Resume an agent session with a user response.
+    pub async fn resume_with_response(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        input_id: Uuid,
+        response: &str,
+    ) -> Result<(), SidecarError> {
+        self.start_sidecar(workspace_id).await?;
+        let sidecars = self.sidecars.read().await;
+        let info = sidecars
+            .get(&workspace_id)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+        info.bridge
+            .resume_with_response(session_id, input_id, response)
+            .await
+            .map_err(SidecarError::Bridge)
+    }
+
+    /// Approve or deny a tool use request.
+    pub async fn approve_tool(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+        input_id: Uuid,
+        tool_call_id: &str,
+        approved: bool,
+        reason: Option<&str>,
+    ) -> Result<(), SidecarError> {
+        self.start_sidecar(workspace_id).await?;
+        let sidecars = self.sidecars.read().await;
+        let info = sidecars
+            .get(&workspace_id)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+        info.bridge
+            .approve_tool(session_id, input_id, tool_call_id, approved, reason)
+            .await
+            .map_err(SidecarError::Bridge)
+    }
+
+    /// Pause an agent session.
+    pub async fn pause_session(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), SidecarError> {
+        self.start_sidecar(workspace_id).await?;
+        let sidecars = self.sidecars.read().await;
+        let info = sidecars
+            .get(&workspace_id)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+        info.bridge
+            .pause(session_id)
+            .await
+            .map_err(SidecarError::Bridge)
+    }
+
+    /// Resume a paused agent session.
+    pub async fn resume_session(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), SidecarError> {
+        self.start_sidecar(workspace_id).await?;
+        let sidecars = self.sidecars.read().await;
+        let info = sidecars
+            .get(&workspace_id)
+            .ok_or_else(|| SidecarError::NotFound(workspace_id))?;
+        info.bridge
+            .resume(session_id)
+            .await
+            .map_err(SidecarError::Bridge)
+    }
+
+    /// Terminate an agent session.
+    pub async fn terminate_session(
+        &self,
+        workspace_id: Uuid,
+        session_id: Uuid,
+    ) -> Result<(), SidecarError> {
+        let sidecars = self.sidecars.read().await;
+        if let Some(info) = sidecars.get(&workspace_id) {
+            let _ = info.bridge.terminate(session_id).await;
+        }
+        Ok(())
     }
 }

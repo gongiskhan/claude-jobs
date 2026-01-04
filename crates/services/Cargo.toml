@@ -12,6 +12,7 @@ utils = { path = "../utils" }
 executors = { path = "../executors" }
 db = { path = "../db" }
 remote = { path = "../remote" }
+agent-runtime = { path = "../agent-runtime" }
 tokio = { workspace = true }
 tokio-util = { version = "0.7", features = ["io"] }
 axum = { workspace = true }
