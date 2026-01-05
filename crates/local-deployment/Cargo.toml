@@ -11,6 +11,7 @@ services = { path = "../services" }
 utils = { path = "../utils" }
 tokio-util = { version = "0.7", features = ["io"] }
 bytes = "1.0"
+serde = { workspace = true }
 serde_json = { workspace = true }
 anyhow = { workspace = true }
 tracing = { workspace = true }

@@ -31,6 +31,7 @@ use utils::{
 use uuid::Uuid;
 
 use crate::container::LocalContainerService;
+pub mod agent_service;
 mod command;
 pub mod container;
 mod copy;

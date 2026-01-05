@@ -2,6 +2,7 @@
 
 ## Project Structure & Module Organization
 - `crates/`: Rust workspace crates — `server` (API + bins), `db` (SQLx models/migrations), `executors`, `services`, `utils`, `deployment`, `local-deployment`, `remote`.
+- `agent-service/`: TypeScript Agent Service using Anthropic Agent SDK for interactive Claude sessions. Runs on port 3001.
 - `frontend/`: React + TypeScript app (Vite, Tailwind). Source in `frontend/src`.
 - `frontend/src/components/dialogs`: Dialog components for the frontend.
 - `remote-frontend/`: Remote deployment frontend.
@@ -10,6 +11,57 @@
 - `npx-cli/`: Files published to the npm CLI package.
 - `scripts/`: Dev helpers (ports, DB preparation).
 - `docs/`: Documentation files.
+
+## Agent Service Architecture
+The `agent-service/` provides interactive Claude agent sessions using the Anthropic Agent SDK:
+- **Purpose**: Replaces CLI subprocess spawning with proper SDK integration
+- **Key features**: Pause/resume for user questions, session persistence, SSE streaming
+- **Port**: Fixed at 3001 (configurable via `AGENT_SERVICE_PORT`)
+- **Auth**: Trusts internal calls from Rust backend (Rust is the auth gateway)
+
+### Core Services
+- `src/services/agent-client.ts`: SDK wrapper with pause/resume logic
+- `src/services/job-manager.ts`: Job lifecycle management (queued → running → paused → completed)
+- `src/services/stream-manager.ts`: SSE event broadcasting
+- `src/services/agent-registry.ts`: Agent type registry (coding, planning, testing, review, explore)
+- `src/services/orchestration.ts`: Multi-phase workflow execution with autofix loops
+- `src/services/dev-server.ts`: Dev server process management with port detection
+
+### API Routes
+- `POST /jobs` - Start a new job
+- `GET /jobs/:id` - Get job status
+- `POST /jobs/:id/resume` - Resume paused job with user input
+- `POST /jobs/:id/cancel` - Cancel running job
+- `GET /jobs/:id/stream` - SSE stream for job events
+- `GET /workflows` - List available workflows
+- `POST /workflows/execute` - Execute a workflow
+- `GET /agent-types` - List agent types
+- `POST /dev-servers` - Start a dev server
+- `GET /dev-servers/running` - List running dev servers
+
+### Rust Integration
+- `crates/local-deployment/src/agent_service.rs` provides HTTP client (`AgentServiceClient`)
+- `crates/local-deployment/src/container.rs` integrates agent-service as alternative to subprocess spawning
+- Session IDs emitted via `LogMsg::SessionId` for persistence
+- Integrates with existing `CodingAgentTurn` model for session continuity
+
+### Enabling Agent Service Mode
+Set environment variable to enable agent-service mode:
+```bash
+VK_AGENT_SERVICE_ENABLED=true
+```
+When enabled:
+1. CodingAgent requests (initial and follow-up) are routed through agent-service
+2. Falls back to subprocess execution if agent-service is unavailable
+3. Agent-service must be running on port 3001
+
+To run agent-service:
+```bash
+cd agent-service && npm install && npm run dev
+```
+
+### Frontend Integration
+- `frontend/src/components/dialogs/agent/AgentQuestionDialog.tsx` - Interactive question dialog
 
 ## Managing Shared Types Between Rust and TypeScript
 

@@ -79,6 +79,9 @@ async function verifyPorts(ports) {
   return frontendAvailable && backendAvailable;
 }
 
+// Port 3001 is reserved for agent-service
+const AGENT_SERVICE_PORT = 3001;
+
 /**
  * Allocate ports for development
  */
@@ -86,7 +89,11 @@ async function allocatePorts() {
   // If PORT env is set, use it for frontend and PORT+1 for backend
   if (process.env.PORT) {
     const frontendPort = parseInt(process.env.PORT, 10);
-    const backendPort = frontendPort + 1;
+    let backendPort = frontendPort + 1;
+    // Skip agent-service port
+    if (backendPort === AGENT_SERVICE_PORT) {
+      backendPort = AGENT_SERVICE_PORT + 1;
+    }
 
     const ports = {
       frontend: frontendPort,
@@ -107,8 +114,8 @@ async function allocatePorts() {
   const existingPorts = loadPorts();
 
   if (existingPorts) {
-    // Verify existing ports are still available
-    if (await verifyPorts(existingPorts)) {
+    // Verify existing ports are still available (and not agent-service port)
+    if (existingPorts.backend !== AGENT_SERVICE_PORT && await verifyPorts(existingPorts)) {
       if (process.argv[2] === "get") {
         console.log("Reusing existing dev ports:");
         console.log(`Frontend: ${existingPorts.frontend}`);
@@ -124,9 +131,14 @@ async function allocatePorts() {
     }
   }
 
-  // Find new free ports
+  // Find new free ports, skipping agent-service port for backend
   const frontendPort = await findFreePort(3000);
-  const backendPort = await findFreePort(frontendPort + 1);
+  let backendStartPort = frontendPort + 1;
+  // Skip agent-service port
+  if (backendStartPort === AGENT_SERVICE_PORT) {
+    backendStartPort = AGENT_SERVICE_PORT + 1;
+  }
+  const backendPort = await findFreePort(backendStartPort);
 
   const ports = {
     frontend: frontendPort,

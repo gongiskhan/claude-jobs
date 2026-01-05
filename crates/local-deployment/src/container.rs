@@ -62,7 +62,10 @@ use utils::{
 };
 use uuid::Uuid;
 
-use crate::{command, copy};
+use crate::{
+    agent_service::{AgentServiceClient, StartJobRequest},
+    command, copy,
+};
 
 #[derive(Clone)]
 pub struct LocalContainerService {
@@ -78,6 +81,7 @@ pub struct LocalContainerService {
     queued_message_service: QueuedMessageService,
     publisher: Result<SharePublisher, RemoteClientNotConfigured>,
     notification_service: NotificationService,
+    agent_service_client: AgentServiceClient,
 }
 
 impl LocalContainerService {
@@ -96,6 +100,7 @@ impl LocalContainerService {
         let child_store = Arc::new(RwLock::new(HashMap::new()));
         let interrupt_senders = Arc::new(RwLock::new(HashMap::new()));
         let notification_service = NotificationService::new(config.clone());
+        let agent_service_client = AgentServiceClient::default();
 
         let container = LocalContainerService {
             db,
@@ -110,6 +115,7 @@ impl LocalContainerService {
             queued_message_service,
             publisher,
             notification_service,
+            agent_service_client,
         };
 
         container.spawn_workspace_cleanup().await;
@@ -140,6 +146,178 @@ impl LocalContainerService {
     async fn take_interrupt_sender(&self, id: &Uuid) -> Option<InterruptSender> {
         let mut map = self.interrupt_senders.write().await;
         map.remove(id)
+    }
+
+    /// Get or create a MsgStore for the given execution
+    async fn get_or_create_msg_store(&self, id: Uuid) -> Arc<MsgStore> {
+        let mut map = self.msg_stores.write().await;
+        if let Some(store) = map.get(&id) {
+            return store.clone();
+        }
+        let store = Arc::new(MsgStore::new());
+        map.insert(id, store.clone());
+        store
+    }
+
+    /// Check if agent-service mode is enabled via environment variable
+    fn is_agent_service_enabled() -> bool {
+        std::env::var("VK_AGENT_SERVICE_ENABLED")
+            .map(|v| v == "1" || v.to_lowercase() == "true")
+            .unwrap_or(false)
+    }
+
+    /// Check if this action type should use the agent-service
+    fn should_use_agent_service(action: &ExecutorAction) -> bool {
+        matches!(
+            action.typ(),
+            ExecutorActionType::CodingAgentInitialRequest(_)
+                | ExecutorActionType::CodingAgentFollowUpRequest(_)
+        )
+    }
+
+    /// Extract prompt from executor action for agent-service
+    fn get_prompt_from_action(action: &ExecutorAction) -> Option<String> {
+        match action.typ() {
+            ExecutorActionType::CodingAgentInitialRequest(req) => Some(req.prompt.clone()),
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => Some(req.prompt.clone()),
+            _ => None,
+        }
+    }
+
+    /// Extract session ID from executor action for agent-service resumption
+    fn get_session_id_from_action(action: &ExecutorAction) -> Option<String> {
+        match action.typ() {
+            ExecutorActionType::CodingAgentFollowUpRequest(req) => Some(req.session_id.clone()),
+            _ => None,
+        }
+    }
+
+    /// Execute via agent-service instead of subprocess
+    async fn start_execution_via_agent_service(
+        &self,
+        workspace: &Workspace,
+        execution_process: &ExecutionProcess,
+        executor_action: &ExecutorAction,
+    ) -> Result<(), ContainerError> {
+        // Check agent-service health
+        let is_available = self
+            .agent_service_client
+            .health_check()
+            .await
+            .unwrap_or(false);
+
+        if !is_available {
+            tracing::warn!(
+                "Agent service not available, falling back to subprocess execution"
+            );
+            return Err(ContainerError::Other(anyhow!(
+                "Agent service not available"
+            )));
+        }
+
+        // Get the worktree path
+        let container_ref = workspace
+            .container_ref
+            .as_ref()
+            .ok_or(ContainerError::Other(anyhow!(
+                "Container ref not found for workspace"
+            )))?;
+        let workspace_path = container_ref.clone();
+
+        // Get prompt from action
+        let prompt = Self::get_prompt_from_action(executor_action).ok_or_else(|| {
+            ContainerError::Other(anyhow!("Could not extract prompt from action"))
+        })?;
+
+        // Get session ID for resumption
+        let session_id = Self::get_session_id_from_action(executor_action);
+
+        // Create job request
+        let request = StartJobRequest {
+            workspace_id: workspace.id.to_string(),
+            workspace_path,
+            prompt,
+            agent_type: Some("coding".to_string()),
+            session_id,
+            allowed_tools: None,
+        };
+
+        // Get or create MsgStore for this execution
+        let msg_store = self
+            .get_or_create_msg_store(execution_process.id)
+            .await;
+
+        // Clone values for the async task
+        let db = self.db.clone();
+        let execution_id = execution_process.id;
+        let client = self.agent_service_client.clone();
+
+        // Spawn the agent-service execution in a background task
+        tokio::spawn(async move {
+            tracing::info!(
+                execution_id = %execution_id,
+                "Starting agent-service execution"
+            );
+
+            match client.execute_and_stream(request, msg_store).await {
+                Ok(job) => {
+                    tracing::info!(
+                        execution_id = %execution_id,
+                        job_id = %job.id,
+                        status = ?job.status,
+                        "Agent-service job completed"
+                    );
+
+                    // Update execution status based on job result
+                    let status = match job.status {
+                        crate::agent_service::JobStatus::Completed => {
+                            ExecutionProcessStatus::Completed
+                        }
+                        crate::agent_service::JobStatus::Failed
+                        | crate::agent_service::JobStatus::Cancelled => {
+                            ExecutionProcessStatus::Failed
+                        }
+                        crate::agent_service::JobStatus::Paused => {
+                            // Job is waiting for user input - agent-service manages pause internally
+                            // Keep execution as Running until the job completes
+                            ExecutionProcessStatus::Running
+                        }
+                        _ => ExecutionProcessStatus::Running,
+                    };
+
+                    if let Err(e) = ExecutionProcess::update_completion(
+                        &db.pool,
+                        execution_id,
+                        status,
+                        Some(0),
+                    )
+                    .await
+                    {
+                        tracing::error!(?e, "Failed to update execution status");
+                    }
+                }
+                Err(e) => {
+                    tracing::error!(
+                        execution_id = %execution_id,
+                        error = %e,
+                        "Agent-service job failed"
+                    );
+
+                    if let Err(e) = ExecutionProcess::update_completion(
+                        &db.pool,
+                        execution_id,
+                        ExecutionProcessStatus::Failed,
+                        None,
+                    )
+                    .await
+                    {
+                        tracing::error!(?e, "Failed to update execution status");
+                    }
+                }
+            }
+        });
+
+        Ok(())
     }
 
     pub async fn cleanup_workspace(db: &DBService, workspace: &Workspace) {
@@ -1039,6 +1217,36 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
     ) -> Result<(), ContainerError> {
+        // Check if agent-service mode is enabled and applicable
+        if Self::is_agent_service_enabled() && Self::should_use_agent_service(executor_action) {
+            tracing::info!(
+                execution_id = %execution_process.id,
+                "Agent-service mode enabled, attempting agent-service execution"
+            );
+
+            // Try agent-service execution; fall back to subprocess on failure
+            match self
+                .start_execution_via_agent_service(workspace, execution_process, executor_action)
+                .await
+            {
+                Ok(()) => {
+                    tracing::info!(
+                        execution_id = %execution_process.id,
+                        "Agent-service execution started successfully"
+                    );
+                    return Ok(());
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        execution_id = %execution_process.id,
+                        error = %e,
+                        "Agent-service execution failed, falling back to subprocess"
+                    );
+                    // Fall through to subprocess execution
+                }
+            }
+        }
+
         // Get the worktree path
         let container_ref = workspace
             .container_ref

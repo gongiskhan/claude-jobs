@@ -12,8 +12,11 @@
   "scripts": {
     "lint": "npm run frontend:lint && npm run backend:lint",
     "format": "cargo fmt --all && cd frontend && npm run format",
-    "check": "npm run frontend:check && npm run backend:check",
-    "dev": "export FRONTEND_PORT=$(node scripts/setup-dev-environment.js frontend) && export BACKEND_PORT=$(node scripts/setup-dev-environment.js backend) && concurrently \"npm run backend:dev:watch\" \"npm run frontend:dev\"",
+    "check": "npm run frontend:check && npm run backend:check && npm run agent-service:check",
+    "dev": "export FRONTEND_PORT=$(node scripts/setup-dev-environment.js frontend) && export BACKEND_PORT=$(node scripts/setup-dev-environment.js backend) && concurrently \"npm run backend:dev:watch\" \"npm run frontend:dev\" \"npm run agent-service:dev\"",
+    "agent-service:dev": "cd agent-service && npm run dev",
+    "agent-service:check": "cd agent-service && npm run typecheck",
+    "agent-service:build": "cd agent-service && npm run build",
     "test:npm": "./test-npm-package.sh",
     "frontend:lint": "cd frontend && npm run lint",
     "frontend:dev": "cd frontend && npm run dev -- --port ${FRONTEND_PORT:-3000} --host",

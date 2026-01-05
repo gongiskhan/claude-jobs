@@ -115,3 +115,11 @@ export {
   FolderPickerDialog,
   type FolderPickerDialogProps,
 } from './shared/FolderPickerDialog';
+
+// Agent dialogs
+export {
+  AgentQuestionDialog,
+  type AgentQuestionDialogProps,
+  type AgentQuestionResult,
+  type QuestionOption,
+} from './agent/AgentQuestionDialog';
