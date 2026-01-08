@@ -10,7 +10,11 @@ use command_group::AsyncCommandGroup;
 use futures::StreamExt;
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use tokio::process::Command;
+use tokio::{
+    io::{AsyncWrite, AsyncWriteExt, BufWriter},
+    process::Command,
+    sync::Mutex,
+};
 use ts_rs::TS;
 use workspace_utils::{
     approvals::ApprovalStatus, diff::create_unified_diff, log_msg::LogMsg, msg_store::MsgStore,
@@ -28,7 +32,6 @@ use crate::{
     env::ExecutionEnv,
     executors::{
         AppendPrompt, AvailabilityInfo, ExecutorError, SpawnedChild, StandardCodingAgentExecutor,
-        codex::client::LogWriter,
     },
     logs::{
         ActionType, FileChange, NormalizedEntry, NormalizedEntryError, NormalizedEntryType,
@@ -38,6 +41,31 @@ use crate::{
     },
     stdout_dup::create_stdout_pipe_writer,
 };
+
+/// LogWriter for writing log messages to a stream
+#[derive(Clone)]
+pub struct LogWriter {
+    writer: Arc<Mutex<BufWriter<Box<dyn AsyncWrite + Send + Unpin>>>>,
+}
+
+impl LogWriter {
+    pub fn new(writer: impl AsyncWrite + Send + Unpin + 'static) -> Self {
+        Self {
+            writer: Arc::new(Mutex::new(BufWriter::new(Box::new(writer)))),
+        }
+    }
+
+    pub async fn log_raw(&self, raw: &str) -> Result<(), ExecutorError> {
+        let mut guard = self.writer.lock().await;
+        guard
+            .write_all(raw.as_bytes())
+            .await
+            .map_err(ExecutorError::Io)?;
+        guard.write_all(b"\n").await.map_err(ExecutorError::Io)?;
+        guard.flush().await.map_err(ExecutorError::Io)?;
+        Ok(())
+    }
+}
 
 fn base_command(claude_code_router: bool) -> &'static str {
     if claude_code_router {
@@ -73,6 +101,22 @@ pub struct ClaudeCode {
     #[ts(skip)]
     #[derivative(Debug = "ignore", PartialEq = "ignore")]
     approvals_service: Option<Arc<dyn ExecutorApprovalService>>,
+}
+
+impl Default for ClaudeCode {
+    fn default() -> Self {
+        Self {
+            append_prompt: AppendPrompt::default(),
+            claude_code_router: None,
+            plan: None,
+            approvals: None,
+            model: None,
+            dangerously_skip_permissions: None,
+            disable_api_key: None,
+            cmd: CmdOverrides::default(),
+            approvals_service: None,
+        }
+    }
 }
 
 impl ClaudeCode {

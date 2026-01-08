@@ -1,5 +1,3 @@
-pub mod codex_setup;
-pub mod cursor_setup;
 pub mod gh_cli_setup;
 pub mod images;
 pub mod pr;
@@ -37,8 +35,8 @@ use executors::{
         ExecutorAction, ExecutorActionType,
         script::{ScriptContext, ScriptRequest, ScriptRequestLanguage},
     },
-    executors::{CodingAgent, ExecutorError},
-    profile::{ExecutorConfigs, ExecutorProfileId},
+    executors::ExecutorError,
+    profile::ExecutorProfileId,
 };
 use git2::BranchType;
 use serde::{Deserialize, Serialize};
@@ -208,34 +206,12 @@ pub async fn create_task_attempt(
 
 #[axum::debug_handler]
 pub async fn run_agent_setup(
-    Extension(workspace): Extension<Workspace>,
-    State(deployment): State<DeploymentImpl>,
-    Json(payload): Json<RunAgentSetupRequest>,
+    Extension(_workspace): Extension<Workspace>,
+    State(_deployment): State<DeploymentImpl>,
+    Json(_payload): Json<RunAgentSetupRequest>,
 ) -> Result<ResponseJson<ApiResponse<RunAgentSetupResponse>>, ApiError> {
-    let executor_profile_id = payload.executor_profile_id;
-    let config = ExecutorConfigs::get_cached();
-    let coding_agent = config.get_coding_agent_or_default(&executor_profile_id);
-    match coding_agent {
-        CodingAgent::CursorAgent(_) => {
-            cursor_setup::run_cursor_setup(&deployment, &workspace).await?;
-        }
-        CodingAgent::Codex(codex) => {
-            codex_setup::run_codex_setup(&deployment, &workspace, &codex).await?;
-        }
-        _ => return Err(ApiError::Executor(ExecutorError::SetupHelperNotSupported)),
-    }
-
-    deployment
-        .track_if_analytics_allowed(
-            "agent_setup_script_executed",
-            serde_json::json!({
-                "executor_profile_id": executor_profile_id.to_string(),
-                "workspace_id": workspace.id.to_string(),
-            }),
-        )
-        .await;
-
-    Ok(ResponseJson(ApiResponse::success(RunAgentSetupResponse {})))
+    // ClaudeCode doesn't require a setup helper - agent-service handles initialization
+    Err(ApiError::Executor(ExecutorError::SetupHelperNotSupported))
 }
 
 #[axum::debug_handler]

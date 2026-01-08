@@ -103,6 +103,7 @@ fn generate_types_content() -> String {
         server::routes::config::CheckEditorAvailabilityQuery::decl(),
         server::routes::config::CheckEditorAvailabilityResponse::decl(),
         server::routes::config::CheckAgentAvailabilityQuery::decl(),
+        server::routes::config::SystemReadinessResponse::decl(),
         server::routes::oauth::CurrentUserResponse::decl(),
         server::routes::sessions::CreateFollowUpAttempt::decl(),
         server::routes::task_attempts::ChangeTargetBranchRequest::decl(),
@@ -166,25 +167,9 @@ fn generate_types_content() -> String {
         executors::executors::AvailabilityInfo::decl(),
         executors::command::CommandBuilder::decl(),
         executors::profile::ExecutorProfileId::decl(),
-        executors::profile::ExecutorConfig::decl(),
         executors::profile::ExecutorConfigs::decl(),
         executors::executors::BaseAgentCapability::decl(),
         executors::executors::claude::ClaudeCode::decl(),
-        executors::executors::gemini::Gemini::decl(),
-        executors::executors::amp::Amp::decl(),
-        executors::executors::codex::Codex::decl(),
-        executors::executors::codex::SandboxMode::decl(),
-        executors::executors::codex::AskForApproval::decl(),
-        executors::executors::codex::ReasoningEffort::decl(),
-        executors::executors::codex::ReasoningSummary::decl(),
-        executors::executors::codex::ReasoningSummaryFormat::decl(),
-        executors::executors::cursor::CursorAgent::decl(),
-        executors::executors::copilot::Copilot::decl(),
-        executors::executors::opencode::Opencode::decl(),
-        executors::executors::qwen::QwenCode::decl(),
-        executors::executors::droid::Droid::decl(),
-        executors::executors::droid::Autonomy::decl(),
-        executors::executors::droid::ReasoningEffortLevel::decl(),
         executors::executors::AppendPrompt::decl(),
         executors::actions::coding_agent_initial::CodingAgentInitialRequest::decl(),
         executors::actions::coding_agent_follow_up::CodingAgentFollowUpRequest::decl(),
@@ -247,44 +232,12 @@ fn generate_json_schema<T: JsonSchema>() -> Result<String, serde_json::Error> {
 }
 
 fn generate_schemas() -> Result<HashMap<&'static str, String>, serde_json::Error> {
-    // // Generate schemas for all executor types
+    // Generate schemas for all executor types (only ClaudeCode is supported)
     println!("Generating JSON schemas…");
     let schemas: HashMap<&str, String> = HashMap::from([
         (
-            "amp",
-            generate_json_schema::<executors::executors::amp::Amp>()?,
-        ),
-        (
             "claude_code",
             generate_json_schema::<executors::executors::claude::ClaudeCode>()?,
-        ),
-        (
-            "gemini",
-            generate_json_schema::<executors::executors::gemini::Gemini>()?,
-        ),
-        (
-            "codex",
-            generate_json_schema::<executors::executors::codex::Codex>()?,
-        ),
-        (
-            "cursor_agent",
-            generate_json_schema::<executors::executors::cursor::CursorAgent>()?,
-        ),
-        (
-            "opencode",
-            generate_json_schema::<executors::executors::opencode::Opencode>()?,
-        ),
-        (
-            "qwen_code",
-            generate_json_schema::<executors::executors::qwen::QwenCode>()?,
-        ),
-        (
-            "copilot",
-            generate_json_schema::<executors::executors::copilot::Copilot>()?,
-        ),
-        (
-            "droid",
-            generate_json_schema::<executors::executors::droid::Droid>()?,
         ),
     ]);
     println!(

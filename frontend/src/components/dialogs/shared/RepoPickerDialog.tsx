@@ -15,6 +15,7 @@ import {
   ArrowLeft,
   Folder,
   FolderGit,
+  FolderOpen,
   FolderPlus,
   Loader2,
   Search,
@@ -31,7 +32,7 @@ export interface RepoPickerDialogProps {
   description?: string;
 }
 
-type Stage = 'options' | 'existing' | 'new';
+type Stage = 'options' | 'existing' | 'new' | 'local-folder';
 
 const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
   ({
@@ -52,6 +53,9 @@ const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
     const [repoName, setRepoName] = useState('');
     const [parentPath, setParentPath] = useState('');
 
+    // Stage: local-folder
+    const [localFolderPath, setLocalFolderPath] = useState('');
+
     useEffect(() => {
       if (modal.visible) {
         setStage('options');
@@ -60,6 +64,7 @@ const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
         setShowMoreRepos(false);
         setRepoName('');
         setParentPath('');
+        setLocalFolderPath('');
       }
     }, [modal.visible]);
 
@@ -112,6 +117,26 @@ const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
       if (selectedPath) {
         registerAndReturn(selectedPath);
       }
+    };
+
+    const handleBrowseLocalFolder = async () => {
+      setError('');
+      const selectedPath = await FolderPickerDialog.show({
+        title: 'Select Local Git Folder',
+        description: 'Choose a local folder with an existing git repository',
+        value: localFolderPath,
+      });
+      if (selectedPath) {
+        setLocalFolderPath(selectedPath);
+      }
+    };
+
+    const handleRegisterLocalFolder = async () => {
+      if (!localFolderPath.trim()) {
+        setError('Please select a folder');
+        return;
+      }
+      registerAndReturn(localFolderPath.trim());
     };
 
     const handleCreateRepo = async () => {
@@ -169,16 +194,33 @@ const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
                 <>
                   <div
                     className="p-4 border cursor-pointer hover:shadow-md transition-shadow rounded-lg bg-card"
+                    onClick={() => setStage('local-folder')}
+                  >
+                    <div className="flex items-start gap-3">
+                      <FolderOpen className="h-5 w-5 mt-0.5 flex-shrink-0 text-muted-foreground" />
+                      <div className="min-w-0 flex-1">
+                        <div className="font-medium text-foreground">
+                          Local Folder
+                        </div>
+                        <div className="text-xs text-muted-foreground mt-1">
+                          Select an existing local git project folder
+                        </div>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div
+                    className="p-4 border cursor-pointer hover:shadow-md transition-shadow rounded-lg bg-card"
                     onClick={() => setStage('existing')}
                   >
                     <div className="flex items-start gap-3">
                       <FolderGit className="h-5 w-5 mt-0.5 flex-shrink-0 text-muted-foreground" />
                       <div className="min-w-0 flex-1">
                         <div className="font-medium text-foreground">
-                          From Git Repository
+                          Recent Repositories
                         </div>
                         <div className="text-xs text-muted-foreground mt-1">
-                          Select an existing repository from your system
+                          Select from recently discovered git repositories
                         </div>
                       </div>
                     </div>
@@ -373,6 +415,66 @@ const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
                 </>
               )}
 
+              {/* Stage: Local Folder */}
+              {stage === 'local-folder' && (
+                <>
+                  <button
+                    className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1"
+                    onClick={goBack}
+                    disabled={isWorking}
+                  >
+                    <ArrowLeft className="h-3 w-3" />
+                    Back to options
+                  </button>
+
+                  <div className="space-y-4">
+                    <div className="space-y-2">
+                      <Label htmlFor="local-folder-path">
+                        Local Git Folder <span className="text-red-500">*</span>
+                      </Label>
+                      <div className="flex space-x-2">
+                        <Input
+                          id="local-folder-path"
+                          type="text"
+                          value={localFolderPath}
+                          onChange={(e) => setLocalFolderPath(e.target.value)}
+                          placeholder="~/projects/my-project"
+                          className="flex-1"
+                          disabled={isWorking}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="icon"
+                          disabled={isWorking}
+                          onClick={handleBrowseLocalFolder}
+                        >
+                          <Folder className="h-4 w-4" />
+                        </Button>
+                      </div>
+                      <p className="text-xs text-muted-foreground">
+                        Select a folder that contains a .git directory
+                      </p>
+                    </div>
+
+                    <Button
+                      onClick={handleRegisterLocalFolder}
+                      disabled={isWorking || !localFolderPath.trim()}
+                      className="w-full"
+                    >
+                      {isWorking ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Adding...
+                        </>
+                      ) : (
+                        'Add Project'
+                      )}
+                    </Button>
+                  </div>
+                </>
+              )}
+
               {error && (
                 <Alert variant="destructive">
                   <AlertCircle className="h-4 w-4" />
@@ -380,7 +482,7 @@ const RepoPickerDialogImpl = NiceModal.create<RepoPickerDialogProps>(
                 </Alert>
               )}
 
-              {isWorking && stage === 'existing' && (
+              {isWorking && (stage === 'existing' || stage === 'local-folder') && (
                 <div className="flex items-center justify-center gap-2 text-sm text-muted-foreground">
                   <Loader2 className="h-4 w-4 animate-spin" />
                   Registering repository...

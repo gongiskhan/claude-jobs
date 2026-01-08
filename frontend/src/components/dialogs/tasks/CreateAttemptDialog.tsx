@@ -10,7 +10,6 @@ import {
 } from '@/components/ui/dialog';
 import { Button } from '@/components/ui/button';
 import RepoBranchSelector from '@/components/tasks/RepoBranchSelector';
-import { ExecutorProfileSelector } from '@/components/settings';
 import { useAttemptCreation } from '@/hooks/useAttemptCreation';
 import {
   useNavigateWithSearch,
@@ -38,7 +37,7 @@ const CreateAttemptDialogImpl = NiceModal.create<CreateAttemptDialogProps>(
     const navigate = useNavigateWithSearch();
     const { projectId } = useProject();
     const { t } = useTranslation('tasks');
-    const { profiles, config } = useUserSystem();
+    const { config } = useUserSystem();
     const { createAttempt, isCreating, error } = useAttemptCreation({
       taskId,
       onSuccess: (attempt) => {
@@ -181,17 +180,7 @@ const CreateAttemptDialogImpl = NiceModal.create<CreateAttemptDialogProps>(
           </DialogHeader>
 
           <div className="space-y-4 py-4">
-            {profiles && (
-              <div className="space-y-2">
-                <ExecutorProfileSelector
-                  profiles={profiles}
-                  selectedProfile={effectiveProfile}
-                  onProfileSelect={setUserSelectedProfile}
-                  showLabel={true}
-                />
-              </div>
-            )}
-
+            {/* Executor selection removed - always uses ClaudeCode */}
             <RepoBranchSelector
               configs={repoBranchConfigs}
               onBranchChange={setRepoBranch}

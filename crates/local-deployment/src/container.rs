@@ -159,14 +159,7 @@ impl LocalContainerService {
         store
     }
 
-    /// Check if agent-service mode is enabled via environment variable
-    fn is_agent_service_enabled() -> bool {
-        std::env::var("VK_AGENT_SERVICE_ENABLED")
-            .map(|v| v == "1" || v.to_lowercase() == "true")
-            .unwrap_or(false)
-    }
-
-    /// Check if this action type should use the agent-service
+    /// Check if this action type should use the agent-service (CodingAgent requests only)
     fn should_use_agent_service(action: &ExecutorAction) -> bool {
         matches!(
             action.typ(),
@@ -207,11 +200,11 @@ impl LocalContainerService {
             .unwrap_or(false);
 
         if !is_available {
-            tracing::warn!(
-                "Agent service not available, falling back to subprocess execution"
+            tracing::error!(
+                "Agent service not available. Claude Code must be installed and the agent service must be running."
             );
             return Err(ContainerError::Other(anyhow!(
-                "Agent service not available"
+                "Claude Code agent service is not available. Please ensure Claude Code is installed and the agent service is running on port 3202."
             )));
         }
 
@@ -1217,36 +1210,20 @@ impl ContainerService for LocalContainerService {
         execution_process: &ExecutionProcess,
         executor_action: &ExecutorAction,
     ) -> Result<(), ContainerError> {
-        // Check if agent-service mode is enabled and applicable
-        if Self::is_agent_service_enabled() && Self::should_use_agent_service(executor_action) {
+        // CodingAgent requests MUST use the agent-service (no subprocess fallback)
+        if Self::should_use_agent_service(executor_action) {
             tracing::info!(
                 execution_id = %execution_process.id,
-                "Agent-service mode enabled, attempting agent-service execution"
+                "Starting CodingAgent execution via agent-service"
             );
 
-            // Try agent-service execution; fall back to subprocess on failure
-            match self
+            // Agent-service is mandatory for CodingAgent requests
+            return self
                 .start_execution_via_agent_service(workspace, execution_process, executor_action)
-                .await
-            {
-                Ok(()) => {
-                    tracing::info!(
-                        execution_id = %execution_process.id,
-                        "Agent-service execution started successfully"
-                    );
-                    return Ok(());
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        execution_id = %execution_process.id,
-                        error = %e,
-                        "Agent-service execution failed, falling back to subprocess"
-                    );
-                    // Fall through to subprocess execution
-                }
-            }
+                .await;
         }
 
+        // Non-CodingAgent actions (cleanup scripts, dev servers) use subprocess
         // Get the worktree path
         let container_ref = workspace
             .container_ref
@@ -1258,13 +1235,7 @@ impl ContainerService for LocalContainerService {
 
         let approvals_service: Arc<dyn ExecutorApprovalService> =
             match executor_action.base_executor() {
-                Some(
-                    BaseCodingAgent::Codex
-                    | BaseCodingAgent::ClaudeCode
-                    | BaseCodingAgent::Gemini
-                    | BaseCodingAgent::QwenCode
-                    | BaseCodingAgent::Opencode,
-                ) => ExecutorApprovalBridge::new(
+                Some(BaseCodingAgent::ClaudeCode) => ExecutorApprovalBridge::new(
                     self.approvals.clone(),
                     self.db.clone(),
                     self.notification_service.clone(),

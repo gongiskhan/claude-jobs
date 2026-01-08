@@ -14,7 +14,7 @@ export interface Config {
 
 export function loadConfig(): Config {
   return {
-    port: parseInt(process.env.AGENT_SERVICE_PORT || '3001', 10),
+    port: parseInt(process.env.AGENT_SERVICE_PORT || '3202', 10),
     host: process.env.AGENT_SERVICE_HOST || '127.0.0.1',
     logLevel: process.env.LOG_LEVEL || 'info',
     maxConcurrentJobs: parseInt(process.env.MAX_CONCURRENT_JOBS || '10', 10),

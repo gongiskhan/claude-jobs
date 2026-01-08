@@ -29,7 +29,7 @@ import { ScratchType, type TaskWithAttemptStatus } from 'shared/types';
 import { useBranchStatus } from '@/hooks';
 import { useAttemptRepo } from '@/hooks/useAttemptRepo';
 import { useAttemptExecution } from '@/hooks/useAttemptExecution';
-import { useUserSystem } from '@/components/ConfigProvider';
+// useUserSystem removed - no longer needed for profiles
 import { cn } from '@/lib/utils';
 //
 import { useReview } from '@/contexts/ReviewProvider';
@@ -39,19 +39,14 @@ import { useKeySubmitFollowUp, Scope } from '@/keyboard';
 import { useHotkeysContext } from 'react-hotkeys-hook';
 import { useProject } from '@/contexts/ProjectContext';
 //
-import { VariantSelector } from '@/components/tasks/VariantSelector';
+// VariantSelector removed - always using default ClaudeCode
 import { useAttemptBranch } from '@/hooks/useAttemptBranch';
 import { FollowUpConflictSection } from '@/components/tasks/follow-up/FollowUpConflictSection';
 import { ClickedElementsBanner } from '@/components/tasks/ClickedElementsBanner';
 import WYSIWYGEditor from '@/components/ui/wysiwyg';
 import { useRetryUi } from '@/contexts/RetryUiContext';
 import { useFollowUpSend } from '@/hooks/useFollowUpSend';
-import { useVariant } from '@/hooks/useVariant';
-import type {
-  DraftFollowUpData,
-  ExecutorAction,
-  ExecutorProfileId,
-} from 'shared/types';
+import type { DraftFollowUpData } from 'shared/types';
 import { buildResolveConflictsInstructions } from '@/lib/conflicts';
 import { useTranslation } from 'react-i18next';
 import { useScratch } from '@/hooks/useScratch';
@@ -98,7 +93,7 @@ export function TaskFollowUpSection({
   );
   const { branch: attemptBranch, refetch: refetchAttemptBranch } =
     useAttemptBranch(workspaceId);
-  const { profiles } = useUserSystem();
+  // profiles removed - no longer needed (always using ClaudeCode)
   const { comments, generateReviewMarkdown, clearComments } = useReview();
   const {
     generateMarkdown: generateClickedMarkdown,
@@ -147,55 +142,8 @@ export function TaskFollowUpSection({
   // Local message state for immediate UI feedback (before debounced save)
   const [localMessage, setLocalMessage] = useState('');
 
-  // Variant selection - derive default from latest process
-  const latestProfileId = useMemo<ExecutorProfileId | null>(() => {
-    if (!processes?.length) return null;
-
-    const extractProfile = (
-      action: ExecutorAction | null
-    ): ExecutorProfileId | null => {
-      let curr: ExecutorAction | null = action;
-      while (curr) {
-        const typ = curr.typ;
-        switch (typ.type) {
-          case 'CodingAgentInitialRequest':
-          case 'CodingAgentFollowUpRequest':
-            return typ.executor_profile_id;
-          case 'ScriptRequest':
-            curr = curr.next_action;
-            continue;
-        }
-      }
-      return null;
-    };
-    return (
-      processes
-        .slice()
-        .reverse()
-        .map((p) => extractProfile(p.executor_action ?? null))
-        .find((pid) => pid !== null) ?? null
-    );
-  }, [processes]);
-
-  const processVariant = latestProfileId?.variant ?? null;
-
-  const currentProfile = useMemo(() => {
-    if (!latestProfileId) return null;
-    return profiles?.[latestProfileId.executor] ?? null;
-  }, [latestProfileId, profiles]);
-
-  // Variant selection with priority: user selection > scratch > process
-  const { selectedVariant, setSelectedVariant: setVariantFromHook } =
-    useVariant({
-      processVariant,
-      scratchVariant: scratchData?.variant,
-    });
-
-  // Ref to track current variant for use in message save callback
-  const variantRef = useRef<string | null>(selectedVariant);
-  useEffect(() => {
-    variantRef.current = selectedVariant;
-  }, [selectedVariant]);
+  // Variant selection removed - always using default ClaudeCode
+  const selectedVariant: string | null = null;
 
   // Refs to stabilize callbacks - avoid re-creating callbacks when these values change
   const scratchRef = useRef(scratch);
@@ -225,21 +173,11 @@ export function TaskFollowUpSection({
     [workspaceId, updateScratch]
   );
 
-  // Wrapper to update variant and save to scratch immediately
-  const setSelectedVariant = useCallback(
-    (variant: string | null) => {
-      setVariantFromHook(variant);
-      // Save immediately when user changes variant
-      saveToScratch(localMessage, variant);
-    },
-    [setVariantFromHook, saveToScratch, localMessage]
-  );
-
-  // Debounced save for message changes (uses current variant from ref)
+  // Debounced save for message changes (variant always null now)
   const { debounced: setFollowUpMessage, cancel: cancelDebouncedSave } =
     useDebouncedCallback(
       useCallback(
-        (value: string) => saveToScratch(value, variantRef.current),
+        (value: string) => saveToScratch(value, null),
         [saveToScratch]
       ),
       500
@@ -749,14 +687,7 @@ export function TaskFollowUpSection({
       {/* Always-visible action bar */}
       <div className="p-4">
         <div className="flex flex-row gap-2 items-center">
-          <div className="flex-1 flex gap-2">
-            <VariantSelector
-              currentProfile={currentProfile}
-              selectedVariant={selectedVariant}
-              onChange={setSelectedVariant}
-              disabled={!isEditable}
-            />
-          </div>
+          <div className="flex-1" />
 
           {/* Hidden file input for attachment - always present */}
           <input

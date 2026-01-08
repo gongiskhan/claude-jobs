@@ -25,7 +25,7 @@ function isPortAvailable(port) {
 /**
  * Find a free port starting from a given port
  */
-async function findFreePort(startPort = 3000) {
+async function findFreePort(startPort = 3200) {
   let port = startPort;
   while (!(await isPortAvailable(port))) {
     port++;
@@ -79,8 +79,8 @@ async function verifyPorts(ports) {
   return frontendAvailable && backendAvailable;
 }
 
-// Port 3001 is reserved for agent-service
-const AGENT_SERVICE_PORT = 3001;
+// Port 3202 is reserved for agent-service
+const AGENT_SERVICE_PORT = 3202;
 
 /**
  * Allocate ports for development
@@ -132,7 +132,7 @@ async function allocatePorts() {
   }
 
   // Find new free ports, skipping agent-service port for backend
-  const frontendPort = await findFreePort(3000);
+  const frontendPort = await findFreePort(3200);
   let backendStartPort = frontendPort + 1;
   // Skip agent-service port
   if (backendStartPort === AGENT_SERVICE_PORT) {

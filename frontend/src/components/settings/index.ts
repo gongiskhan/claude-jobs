@@ -1,1 +1,1 @@
-export { default as ExecutorProfileSelector } from './ExecutorProfileSelector';
+// Settings components removed - executor selection no longer supported

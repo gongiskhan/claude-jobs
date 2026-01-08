@@ -13,15 +13,16 @@ import {
   type UserSystemInfo,
   type BaseAgentCapability,
   type LoginStatus,
+  type CodingAgent,
+  type BaseCodingAgent,
 } from 'shared/types';
-import type { ExecutorConfig } from 'shared/types';
 import { configApi } from '../lib/api';
 import { updateLanguageFromConfig } from '../i18n/config';
 
 interface UserSystemState {
   config: Config | null;
   environment: Environment | null;
-  profiles: Record<string, ExecutorConfig> | null;
+  profiles: Partial<Record<BaseCodingAgent, CodingAgent>> | null;
   capabilities: Record<string, BaseAgentCapability[]> | null;
   analyticsUserId: string | null;
   loginStatus: LoginStatus | null;
@@ -39,12 +40,12 @@ interface UserSystemContextType {
 
   // System data access
   environment: Environment | null;
-  profiles: Record<string, ExecutorConfig> | null;
+  profiles: Partial<Record<BaseCodingAgent, CodingAgent>> | null;
   capabilities: Record<string, BaseAgentCapability[]> | null;
   analyticsUserId: string | null;
   loginStatus: LoginStatus | null;
   setEnvironment: (env: Environment | null) => void;
-  setProfiles: (profiles: Record<string, ExecutorConfig> | null) => void;
+  setProfiles: (profiles: Partial<Record<BaseCodingAgent, CodingAgent>> | null) => void;
   setCapabilities: (caps: Record<string, BaseAgentCapability[]> | null) => void;
 
   // Reload system data
@@ -76,7 +77,7 @@ export function UserSystemProvider({ children }: UserSystemProviderProps) {
   const analyticsUserId = userSystemInfo?.analytics_user_id || null;
   const loginStatus = userSystemInfo?.login_status || null;
   const profiles =
-    (userSystemInfo?.executors as Record<string, ExecutorConfig> | null) ||
+    (userSystemInfo?.executors as Partial<Record<BaseCodingAgent, CodingAgent>> | null) ||
     null;
   const capabilities =
     (userSystemInfo?.capabilities as Record<
@@ -156,12 +157,12 @@ export function UserSystemProvider({ children }: UserSystemProviderProps) {
   );
 
   const setProfiles = useCallback(
-    (newProfiles: Record<string, ExecutorConfig> | null) => {
+    (newProfiles: Partial<Record<BaseCodingAgent, CodingAgent>> | null) => {
       queryClient.setQueryData<UserSystemInfo>(['user-system'], (old) => {
         if (!old || !newProfiles) return old;
         return {
           ...old,
-          executors: newProfiles as unknown as UserSystemInfo['executors'],
+          executors: newProfiles as UserSystemInfo['executors'],
         };
       });
     },

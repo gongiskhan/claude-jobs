@@ -12,12 +12,25 @@
 - `scripts/`: Dev helpers (ports, DB preparation).
 - `docs/`: Documentation files.
 
-## Agent Service Architecture
+## Agent Service Architecture (Required)
 The `agent-service/` provides interactive Claude agent sessions using the Anthropic Agent SDK:
-- **Purpose**: Replaces CLI subprocess spawning with proper SDK integration
+- **Purpose**: Exclusive execution method for Claude Code - no subprocess fallback
 - **Key features**: Pause/resume for user questions, session persistence, SSE streaming
 - **Port**: Fixed at 3001 (configurable via `AGENT_SERVICE_PORT`)
 - **Auth**: Trusts internal calls from Rust backend (Rust is the auth gateway)
+
+### System Requirements
+**The application requires Claude Code to be installed and agent-service to be running.**
+- On startup, the app checks system readiness via `/api/system-readiness`
+- If Claude Code is not installed or agent-service is unavailable, a blocking error dialog is shown
+- Users cannot proceed until requirements are met
+- No subprocess fallback exists - agent-service is mandatory
+
+### Executor Model
+The app exclusively uses **Claude Code** (`BaseCodingAgent.CLAUDE_CODE`):
+- All other executor types (AMP, Codex, Copilot, Cursor, etc.) have been removed
+- No model/variant selection UI exists - always uses Claude Code defaults
+- The `execution_processes.executor` column always stores "CLAUDE_CODE"
 
 ### Core Services
 - `src/services/agent-client.ts`: SDK wrapper with pause/resume logic
@@ -41,27 +54,20 @@ The `agent-service/` provides interactive Claude agent sessions using the Anthro
 
 ### Rust Integration
 - `crates/local-deployment/src/agent_service.rs` provides HTTP client (`AgentServiceClient`)
-- `crates/local-deployment/src/container.rs` integrates agent-service as alternative to subprocess spawning
+- `crates/local-deployment/src/container.rs` routes all execution through agent-service
 - Session IDs emitted via `LogMsg::SessionId` for persistence
 - Integrates with existing `CodingAgentTurn` model for session continuity
 
-### Enabling Agent Service Mode
-Set environment variable to enable agent-service mode:
-```bash
-VK_AGENT_SERVICE_ENABLED=true
-```
-When enabled:
-1. CodingAgent requests (initial and follow-up) are routed through agent-service
-2. Falls back to subprocess execution if agent-service is unavailable
-3. Agent-service must be running on port 3001
-
-To run agent-service:
+### Running Agent Service
+Agent service must be running for the app to function:
 ```bash
 cd agent-service && npm install && npm run dev
 ```
 
 ### Frontend Integration
 - `frontend/src/components/dialogs/agent/AgentQuestionDialog.tsx` - Interactive question dialog
+- `frontend/src/components/dialogs/global/SystemRequirementsErrorDialog.tsx` - Blocking error if requirements not met
+- `frontend/src/hooks/useSystemReadiness.ts` - Hook for checking system requirements
 
 ## Managing Shared Types Between Rust and TypeScript
 

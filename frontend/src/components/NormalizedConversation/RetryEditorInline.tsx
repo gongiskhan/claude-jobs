@@ -1,20 +1,16 @@
-import { useCallback, useMemo, useRef, useState } from 'react';
+import { useCallback, useRef, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import WYSIWYGEditor from '@/components/ui/wysiwyg';
 import { useProject } from '@/contexts/ProjectContext';
 import { cn } from '@/lib/utils';
-import { VariantSelector } from '@/components/tasks/VariantSelector';
 import { Button } from '@/components/ui/button';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { AlertCircle, Loader2, Paperclip, Send, X } from 'lucide-react';
 import { imagesApi } from '@/lib/api';
 import type { WorkspaceWithSession } from '@/types/attempt';
 import { useAttemptExecution } from '@/hooks/useAttemptExecution';
-import { useUserSystem } from '@/components/ConfigProvider';
 import { useBranchStatus } from '@/hooks/useBranchStatus';
-import { useVariant } from '@/hooks/useVariant';
 import { useRetryProcess } from '@/hooks/useRetryProcess';
-import type { ExecutorAction, ExecutorProfileId } from 'shared/types';
 
 export function RetryEditorInline({
   attempt,
@@ -31,7 +27,6 @@ export function RetryEditorInline({
   const attemptId = attempt.id;
   const { isAttemptRunning, attemptData } = useAttemptExecution(attemptId);
   const { data: branchStatus } = useBranchStatus(attemptId);
-  const { profiles } = useUserSystem();
   const { projectId } = useProject();
 
   const [message, setMessage] = useState(initialContent);
@@ -40,38 +35,8 @@ export function RetryEditorInline({
   // Get sessionId from attempt's session
   const sessionId = attempt.session?.id;
 
-  // Extract variant from the process being retried
-  const processVariant = useMemo<string | null>(() => {
-    const process = attemptData.processes?.find(
-      (p) => p.id === executionProcessId
-    );
-    if (!process?.executor_action) return null;
-
-    const extractProfile = (
-      action: ExecutorAction | null
-    ): ExecutorProfileId | null => {
-      let curr: ExecutorAction | null = action;
-      while (curr) {
-        const typ = curr.typ;
-        switch (typ.type) {
-          case 'CodingAgentInitialRequest':
-          case 'CodingAgentFollowUpRequest':
-            return typ.executor_profile_id;
-          case 'ScriptRequest':
-            curr = curr.next_action;
-            continue;
-        }
-      }
-      return null;
-    };
-
-    return extractProfile(process.executor_action)?.variant ?? null;
-  }, [attemptData.processes, executionProcessId]);
-
-  const { selectedVariant, setSelectedVariant } = useVariant({
-    processVariant,
-    scratchVariant: undefined,
-  });
+  // Variant selection removed - always using default ClaudeCode
+  const selectedVariant: string | null = null;
 
   const retryMutation = useRetryProcess(
     sessionId ?? '',
@@ -170,11 +135,6 @@ export function RetryEditorInline({
       </div>
 
       <div className="flex items-center gap-2">
-        <VariantSelector
-          selectedVariant={selectedVariant}
-          onChange={setSelectedVariant}
-          currentProfile={profiles?.[attempt.session?.executor ?? ''] ?? null}
-        />
         <input
           ref={fileInputRef}
           type="file"

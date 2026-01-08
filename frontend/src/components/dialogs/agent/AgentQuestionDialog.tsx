@@ -37,7 +37,7 @@ export interface AgentQuestionResult {
 const AgentQuestionDialogImpl = NiceModal.create<AgentQuestionDialogProps>(
   (props) => {
     const modal = useModal();
-    const { questionId, question, header, options, multiSelect = false } = props;
+    const { questionId: _questionId, question, header, options, multiSelect = false } = props;
 
     const [selectedOptions, setSelectedOptions] = useState<Set<string>>(
       new Set()

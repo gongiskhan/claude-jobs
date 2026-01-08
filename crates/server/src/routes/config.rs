@@ -41,6 +41,7 @@ pub fn router() -> Router<DeploymentImpl> {
             get(check_editor_availability),
         )
         .route("/agents/check-availability", get(check_agent_availability))
+        .route("/system-readiness", get(check_system_readiness))
 }
 
 #[derive(Debug, Serialize, Deserialize, TS)]
@@ -484,4 +485,69 @@ async fn check_agent_availability(
     };
 
     ResponseJson(ApiResponse::success(info))
+}
+
+/// Response for the system readiness check endpoint
+#[derive(Debug, Serialize, Deserialize, TS)]
+#[ts(export)]
+pub struct SystemReadinessResponse {
+    /// Whether Claude Code is installed and detected
+    pub claude_code_installed: bool,
+    /// Whether the agent service is available and responding
+    pub agent_service_available: bool,
+    /// Whether the system is ready to run coding agents
+    pub ready: bool,
+    /// Error message if not ready
+    pub error_message: Option<String>,
+}
+
+/// Check if the system is ready to run coding agents
+/// This endpoint verifies:
+/// 1. Claude Code is installed
+/// 2. Agent service is available
+#[axum::debug_handler]
+async fn check_system_readiness(
+    State(_deployment): State<DeploymentImpl>,
+) -> ResponseJson<ApiResponse<SystemReadinessResponse>> {
+    // Check if Claude Code is installed
+    let profiles = ExecutorConfigs::get_cached();
+    let profile_id = ExecutorProfileId::new(BaseCodingAgent::ClaudeCode);
+    let claude_code_installed = profiles
+        .get_coding_agent(&profile_id)
+        .map(|agent| agent.get_availability_info().is_available())
+        .unwrap_or(false);
+
+    // Check if agent service is available
+    let agent_service_url = std::env::var("VK_AGENT_SERVICE_URL")
+        .unwrap_or_else(|_| "http://127.0.0.1:3202".to_string());
+    let agent_service_available = check_agent_service_health(&agent_service_url).await;
+
+    // Determine overall readiness and error message
+    let (ready, error_message) = match (claude_code_installed, agent_service_available) {
+        (true, true) => (true, None),
+        (false, _) => (
+            false,
+            Some("Claude Code is not installed. Please install Claude Code to use this application.".to_string()),
+        ),
+        (true, false) => (
+            false,
+            Some("Agent service is not running. Please start the agent service (npm run dev in agent-service/).".to_string()),
+        ),
+    };
+
+    ResponseJson(ApiResponse::success(SystemReadinessResponse {
+        claude_code_installed,
+        agent_service_available,
+        ready,
+        error_message,
+    }))
+}
+
+/// Check if the agent service is healthy by making a health check request
+async fn check_agent_service_health(base_url: &str) -> bool {
+    let health_url = format!("{}/health", base_url);
+    match reqwest::get(&health_url).await {
+        Ok(response) => response.status().is_success(),
+        Err(_) => false,
+    }
 }

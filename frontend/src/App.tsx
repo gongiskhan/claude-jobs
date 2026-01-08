@@ -11,7 +11,6 @@ import { useAuth } from '@/hooks';
 import { usePreviousPath } from '@/hooks/usePreviousPath';
 
 import {
-  AgentSettings,
   GeneralSettings,
   McpSettings,
   OrganizationSettings,
@@ -32,8 +31,10 @@ import { Loader } from '@/components/ui/loader';
 import { DisclaimerDialog } from '@/components/dialogs/global/DisclaimerDialog';
 import { OnboardingDialog } from '@/components/dialogs/global/OnboardingDialog';
 import { ReleaseNotesDialog } from '@/components/dialogs/global/ReleaseNotesDialog';
+import { SystemRequirementsErrorDialog } from '@/components/dialogs/global/SystemRequirementsErrorDialog';
 import { ClickedElementsProvider } from './contexts/ClickedElementsProvider';
 import NiceModal from '@ebay/nice-modal-react';
+import { configApi } from '@/lib/api';
 
 const SentryRoutes = Sentry.withSentryReactRouterV6Routing(Routes);
 
@@ -65,6 +66,24 @@ function AppContent() {
     let cancelled = false;
 
     const showNextStep = async () => {
+      // 0) System readiness check - block until system is ready
+      try {
+        const readiness = await configApi.checkSystemReadiness();
+        if (!readiness.ready) {
+          await SystemRequirementsErrorDialog.show({
+            claudeCodeInstalled: readiness.claude_code_installed,
+            agentServiceAvailable: readiness.agent_service_available,
+            errorMessage: readiness.error_message ?? undefined,
+          });
+          SystemRequirementsErrorDialog.hide();
+          // After dialog resolves (system is ready), continue with next steps
+        }
+      } catch {
+        // If we can't check system readiness, assume it's ready
+        // (the error might be because the backend isn't running yet)
+        console.warn('[System Readiness] Could not check system readiness');
+      }
+
       // 1) Disclaimer - first step
       if (!config.disclaimer_acknowledged) {
         await DisclaimerDialog.show();
@@ -143,7 +162,6 @@ function AppContent() {
                     path="organizations"
                     element={<OrganizationSettings />}
                   />
-                  <Route path="agents" element={<AgentSettings />} />
                   <Route path="mcp" element={<McpSettings />} />
                 </Route>
                 <Route

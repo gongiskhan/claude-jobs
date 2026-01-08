@@ -2,19 +2,14 @@ use std::sync::Arc;
 
 use workspace_utils::approvals::ApprovalStatus;
 
-use super::types::PermissionMode;
+use super::{types::PermissionMode, ClaudeJson, LogWriter};
 use crate::{
     approvals::{ExecutorApprovalError, ExecutorApprovalService},
     executors::{
         ExecutorError,
-        claude::{
-            ClaudeJson,
-            types::{
-                PermissionResult, PermissionUpdate, PermissionUpdateDestination,
-                PermissionUpdateType,
-            },
+        claude::types::{
+            PermissionResult, PermissionUpdate, PermissionUpdateDestination, PermissionUpdateType,
         },
-        codex::client::LogWriter,
     },
 };
 

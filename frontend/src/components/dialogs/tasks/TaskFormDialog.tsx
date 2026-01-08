@@ -28,7 +28,6 @@ import WYSIWYGEditor from '@/components/ui/wysiwyg';
 import type { LocalImageMetadata } from '@/components/ui/wysiwyg/context/task-attempt-context';
 import BranchSelector from '@/components/tasks/BranchSelector';
 import RepoBranchSelector from '@/components/tasks/RepoBranchSelector';
-import { ExecutorProfileSelector } from '@/components/settings';
 import { useUserSystem } from '@/components/ConfigProvider';
 import {
   useTaskImages,
@@ -90,7 +89,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
   const { t } = useTranslation(['tasks', 'common']);
   const { createTask, createAndStart, updateTask } =
     useTaskMutations(projectId);
-  const { system, profiles, loading: userSystemLoading } = useUserSystem();
+  const { system, loading: userSystemLoading } = useUserSystem();
   const { upload, uploadForTask } = useImageUpload();
   const { enableScope, disableScope } = useHotkeysContext();
 
@@ -519,23 +518,7 @@ const TaskFormDialogImpl = NiceModal.create<TaskFormDialogProps>((props) => {
                     )}
                   >
                     <div className="flex items-center gap-2">
-                      <form.Field name="executorProfileId">
-                        {(field) => (
-                          <ExecutorProfileSelector
-                            profiles={profiles}
-                            selectedProfile={field.state.value}
-                            onProfileSelect={(profile) =>
-                              field.handleChange(profile)
-                            }
-                            disabled={
-                              isSubmitting || !autoStartField.state.value
-                            }
-                            showLabel={false}
-                            className="flex items-center gap-2 flex-row flex-[2] min-w-0"
-                            itemClassName="flex-1 min-w-0"
-                          />
-                        )}
-                      </form.Field>
+                      {/* Executor selection removed - always uses ClaudeCode */}
                       {isSingleRepo && (
                         <form.Field name="repoBranches">
                           {(field) => {

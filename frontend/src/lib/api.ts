@@ -89,6 +89,7 @@ import {
   AbortConflictsRequest,
   Session,
   Workspace,
+  SystemReadinessResponse,
 } from 'shared/types';
 import type { WorkspaceWithSession } from '@/types/attempt';
 import { createWorkspaceWithSession } from '@/types/attempt';
@@ -859,6 +860,10 @@ export const configApi = {
       `/api/agents/check-availability?executor=${encodeURIComponent(agent)}`
     );
     return handleApiResponse<AvailabilityInfo>(response);
+  },
+  checkSystemReadiness: async (): Promise<SystemReadinessResponse> => {
+    const response = await makeRequest('/api/system-readiness');
+    return handleApiResponse<SystemReadinessResponse>(response);
   },
 };
 

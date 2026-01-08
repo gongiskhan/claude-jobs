@@ -20,8 +20,8 @@ use tokio::sync::mpsc;
 use tracing::{error, info};
 use utils::{log_msg::LogMsg, msg_store::MsgStore};
 
-/// Default agent service URL (localhost, fixed port 3001)
-const DEFAULT_AGENT_SERVICE_URL: &str = "http://127.0.0.1:3001";
+/// Default agent service URL (localhost, fixed port 3202)
+const DEFAULT_AGENT_SERVICE_URL: &str = "http://127.0.0.1:3202";
 
 /// Errors from the agent service client
 #[derive(Debug, Error)]
